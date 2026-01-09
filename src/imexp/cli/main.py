@@ -1,25 +1,94 @@
-
 """CLI wrapper for imessage-exporter with contact post-processing."""
 
 import re
 import sys
 import json
 import shutil
+import logging
 import sqlite3
 import plistlib
 import argparse
 import subprocess
 import datetime as dt
 from pathlib import Path
+from dataclasses import dataclass
 
 import dateparser
 
+from imexp.cli import config
 
-IOS_BACKUP_ROOT = Path("~/Library/Application Support/MobileSync/Backup").expanduser()
+
 IOS_CONTACTS_REL = Path("31/31bb7ba8914766d4ba40d6dfb6113c8b614be442")
-BASE_OUTPUT_DIR = Path("./data/messages/sms")
 CONTACTS_FILE = "contacts.json"
 HISTORY_FILE = "history.json"
+
+
+@dataclass(frozen=True)
+class DateRange:
+    """Start/end date range for exports."""
+
+    start: dt.datetime
+    end: dt.datetime | None
+
+
+@dataclass(frozen=True)
+class ExportOptions:
+    """CLI options that affect exporter behavior."""
+
+    platform: str
+    db_path: str
+    conv_filter: str
+    use_caller_id: bool
+    copy_method: str
+    output_format: str
+
+
+@dataclass(frozen=True)
+class PathsConfig:
+    """Filesystem paths used by the CLI."""
+
+    export_path: Path
+    contacts_json: Path
+    history_json: Path
+
+
+@dataclass(frozen=True)
+class UserLabels:
+    """User label settings for post-processing."""
+
+    me_label: str | None
+    my_numbers: list[str]
+
+
+@dataclass(frozen=True)
+class RunConfig:
+    """Resolved settings for an export run."""
+
+    options: ExportOptions
+    dates: DateRange
+    paths: PathsConfig
+    labels: UserLabels
+
+
+@dataclass(frozen=True)
+class PostprocessContext:
+    """Inputs for post-processing exported files."""
+
+    export_dir: Path
+    contacts_map: dict[str, str]
+    overrides: dict[str, str]
+    labels: UserLabels
+
+
+def get_logger() -> logging.Logger:
+    """Return the module logger."""
+    return logging.getLogger("imexp")
+
+
+def configure_logging(verbose: bool) -> None:
+    """Configure logging for console output."""
+    level = logging.DEBUG if verbose else logging.INFO
+    logging.basicConfig(level=level, format="%(message)s")
 
 
 def eprint(msg: str) -> None:
@@ -29,8 +98,9 @@ def eprint(msg: str) -> None:
 
 def run(cmd: list[str]) -> int:
     """Run a subprocess command and return the exit code."""
-    eprint("Running:")
-    eprint("  " + " ".join(cmd))
+    logger = get_logger()
+    logger.info("Running:")
+    logger.info("  %s", " ".join(cmd))
     return subprocess.call(cmd)
 
 
@@ -81,7 +151,7 @@ def list_ios_backups(root: Path) -> list[dict]:
                     "last_backup": info.get("Last Backup Date"),
                 }
             )
-        except Exception:
+        except (OSError, plistlib.InvalidFileException, ValueError):
             continue
     backups.sort(key=lambda b: b["last_backup"] or dt.datetime.min, reverse=True)
     return backups
@@ -89,15 +159,18 @@ def list_ios_backups(root: Path) -> list[dict]:
 
 def pick_ios_backup() -> Path:
     """Prompt to choose an iOS backup folder."""
-    backups = list_ios_backups(IOS_BACKUP_ROOT)
+    backups = list_ios_backups(config.IOS_BACKUP_ROOT)
     if not backups:
-        eprint(f"No iOS backups found in {IOS_BACKUP_ROOT}")
+        eprint(f"No iOS backups found in {config.IOS_BACKUP_ROOT}")
         sys.exit(1)
     eprint("Detected iOS backups:")
-    for i, b in enumerate(backups, start=1):
-        last = b["last_backup"]
+    for i, backup in enumerate(backups, start=1):
+        last = backup["last_backup"]
         last_s = last.isoformat(sep=" ") if isinstance(last, dt.datetime) else "Unknown"
-        eprint(f"  {i}) {b['device_name']} (iOS {b['product_version']}) - {last_s}")
+        eprint(
+            f"  {i}) {backup['device_name']} "
+            f"(iOS {backup['product_version']}) - {last_s}"
+        )
     choice = prompt("Select backup", default="1")
     try:
         idx = max(1, min(len(backups), int(choice)))
@@ -116,25 +189,23 @@ def parse_date(text: str) -> dt.datetime | None:
     )
 
 
-def date_to_cli(d: dt.datetime) -> str:
+def date_to_cli(value: dt.datetime) -> str:
     """Format a date for CLI arguments."""
-    return d.strftime("%Y-%m-%d")
+    return value.strftime("%Y-%m-%d")
 
 
-def load_history(base_dir: Path) -> dict:
+def load_history(history_path: Path) -> dict:
     """Load export history from disk."""
-    history_path = base_dir / HISTORY_FILE
     if not history_path.exists():
         return {}
     try:
         return json.loads(history_path.read_text())
-    except Exception:
+    except (OSError, json.JSONDecodeError):
         return {}
 
 
-def save_history(base_dir: Path, history: dict) -> None:
+def save_history(history_path: Path, history: dict) -> None:
     """Persist export history to disk."""
-    history_path = base_dir / HISTORY_FILE
     history_path.write_text(json.dumps(history, indent=2, sort_keys=True))
 
 
@@ -186,12 +257,12 @@ def load_contacts_from_macos() -> dict[str, str]:
                 if phone:
                     for key in phone_keys(phone):
                         mapping[key] = name
-        except Exception:
+        except sqlite3.Error:
             continue
         finally:
             try:
                 conn.close()
-            except Exception:
+            except sqlite3.Error:
                 pass
     return mapping
 
@@ -223,12 +294,12 @@ def load_contacts_from_ios_backup(backup_root: Path) -> dict[str, str]:
                 for token in str(phones).split():
                     for key in phone_keys(token):
                         mapping[key] = name
-    except Exception:
+    except sqlite3.Error:
         return mapping
     finally:
         try:
             conn.close()
-        except Exception:
+        except sqlite3.Error:
             pass
     return mapping
 
@@ -239,7 +310,7 @@ def load_contacts_json(path: Path) -> dict:
         return {"overrides": {}}
     try:
         return json.loads(path.read_text())
-    except Exception:
+    except (OSError, json.JSONDecodeError):
         return {"overrides": {}}
 
 
@@ -272,10 +343,10 @@ def build_replacements(
 ) -> dict[str, str]:
     """Combine contact data with overrides into a replacement map."""
     repl = {}
-    for k, v in contacts_map.items():
-        repl[k] = v
-    for k, v in overrides.items():
-        repl[k] = v
+    for key, value in contacts_map.items():
+        repl[key] = value
+    for key, value in overrides.items():
+        repl[key] = value
     if me_label:
         for num in extra_numbers:
             for key in phone_keys(num):
@@ -294,23 +365,16 @@ def replace_in_text(text: str, key: str, value: str) -> str:
     return text.replace(key, value)
 
 
-def postprocess_exports(
-    export_dir: Path,
-    contacts_map: dict[str, str],
-    overrides: dict[str, str],
-    me_label: str | None,
-    my_numbers: list[str],
-    ask_for_missing: bool = True,
-) -> None:
+def postprocess_exports(context: PostprocessContext, ask_for_missing: bool = True) -> None:
     """Rewrite export files and names using contact data."""
-    txt_files = list(export_dir.glob("*.txt"))
+    txt_files = list(context.export_dir.glob("*.txt"))
     if not txt_files:
         return
 
     unknown_tokens = set()
-    for f in txt_files:
-        unknown_tokens |= extract_tokens_from_filename(f.name)
-    known_keys = set(contacts_map.keys()) | set(overrides.keys())
+    for file_path in txt_files:
+        unknown_tokens |= extract_tokens_from_filename(file_path.name)
+    known_keys = set(context.contacts_map.keys()) | set(context.overrides.keys())
     if ask_for_missing:
         for token in sorted(unknown_tokens):
             if token in known_keys:
@@ -318,156 +382,274 @@ def postprocess_exports(
             if "@" in token or re.fullmatch(r"\+?\d{7,15}", token):
                 name = prompt(f"Name for {token} (enter to skip)", default="")
                 if name:
-                    overrides[token] = name
+                    context.overrides[token] = name
 
-    replacements = build_replacements(overrides, contacts_map, my_numbers, me_label)
+    replacements = build_replacements(
+        context.overrides,
+        context.contacts_map,
+        context.labels.my_numbers,
+        context.labels.me_label,
+    )
     if not replacements:
         return
 
-    # Replace content and filenames
     keys = sorted(replacements.keys(), key=len, reverse=True)
-    for f in txt_files:
-        text = f.read_text(errors="ignore")
+    for file_path in txt_files:
+        text = file_path.read_text(errors="ignore")
         for key in keys:
             text = replace_in_text(text, key, replacements[key])
-        f.write_text(text)
+        file_path.write_text(text)
 
-    for f in txt_files:
-        new_name = f.name
+    for file_path in txt_files:
+        new_name = file_path.name
         for key in keys:
             new_name = replace_in_text(new_name, key, replacements[key])
-        if new_name != f.name:
-            f.rename(f.with_name(new_name))
+        if new_name != file_path.name:
+            file_path.rename(file_path.with_name(new_name))
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
     """Build the CLI argument parser."""
-    p = argparse.ArgumentParser(description="Interactive wrapper for imessage-exporter")
-    p.add_argument("--platform", choices=["macOS", "iOS"], help="Source platform")
-    p.add_argument("--db-path", help="Path to macOS chat.db or iOS backup root")
-    p.add_argument("--format", default="txt", choices=["txt", "html"])
-    p.add_argument("--copy-method", default="full", choices=["disabled", "clone", "basic", "full"])
-    p.add_argument("--start-date", help="Start date (natural language)")
-    p.add_argument("--end-date", help="End date (natural language)")
-    p.add_argument("--use-caller-id", action="store_true")
-    p.add_argument("--conversation-filter", help="Comma-separated filter string")
-    p.add_argument("--export-path", help="Output directory")
-    p.add_argument("--non-interactive", action="store_true")
-    return p
+    parser = argparse.ArgumentParser(description="Interactive wrapper for imessage-exporter")
+    parser.add_argument("--platform", choices=["macOS", "iOS"], help="Source platform")
+    parser.add_argument("--db-path", help="Path to macOS chat.db or iOS backup root")
+    parser.add_argument("--format", default="txt", choices=["txt", "html"])
+    parser.add_argument(
+        "--copy-method", default="full", choices=["disabled", "clone", "basic", "full"]
+    )
+    parser.add_argument("--start-date", help="Start date (natural language)")
+    parser.add_argument("--end-date", help="End date (natural language)")
+    parser.add_argument("--use-caller-id", action="store_true")
+    parser.add_argument("--conversation-filter", help="Comma-separated filter string")
+    parser.add_argument("--export-path", help="Output directory")
+    parser.add_argument("--contacts-json", help="Path to contacts overrides JSON")
+    parser.add_argument("--history-json", help="Path to history JSON")
+    parser.add_argument("--non-interactive", action="store_true")
+    parser.add_argument("--verbose", action="store_true")
+    return parser
+
+
+def resolve_contacts_path(export_base: Path, args: argparse.Namespace) -> Path:
+    """Resolve the contacts JSON path from args or defaults."""
+    return Path(args.contacts_json or export_base / CONTACTS_FILE)
+
+
+def resolve_history_path(export_base: Path, args: argparse.Namespace) -> Path:
+    """Resolve the history JSON path from args or defaults."""
+    return Path(args.history_json or export_base / HISTORY_FILE)
+
+
+def resolve_platform_and_db() -> tuple[str, str]:
+    """Prompt for platform and db path when interactive."""
+    platform = prompt("Platform (macOS/iOS)", default="macOS")
+    platform = "iOS" if platform.lower().startswith("i") else "macOS"
+    if platform == "iOS":
+        backup_root = pick_ios_backup()
+        return platform, str(backup_root)
+    return platform, ""
+
+
+def resolve_date_range(last_end_dt: dt.datetime | None) -> DateRange:
+    """Resolve start and end dates for interactive runs."""
+    default_start = last_end_dt.strftime("%Y-%m-%d") if last_end_dt else ""
+    start_text = prompt("Start date (natural language)", default=default_start)
+    start_dt = parse_date(start_text) or dt.datetime.now()
+
+    end_text = prompt("End date (natural language, enter for now)", default="now")
+    end_dt = parse_date(end_text) or dt.datetime.now()
+    return DateRange(start=start_dt, end=end_dt)
+
+
+def resolve_output_path(export_base: Path) -> Path:
+    """Resolve the output directory for interactive runs."""
+    label = prompt("Output label (enter for timestamp)", default="")
+    if label:
+        subdir = sanitize_label(label)
+    else:
+        subdir = dt.datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
+    return export_base / subdir
+
+
+def resolve_user_labels() -> UserLabels:
+    """Prompt for user labels and numbers."""
+    me_label = prompt("Label for your own number (enter to skip)", default="").strip()
+    my_numbers_raw = prompt("Your phone numbers (comma-separated, enter to skip)", default="")
+    my_numbers = [n.strip() for n in my_numbers_raw.split(",") if n.strip()]
+    return UserLabels(me_label=me_label or None, my_numbers=my_numbers)
+
+
+def collect_inputs_interactive(
+    export_base: Path,
+    history: dict,
+    contacts_path: Path,
+    history_path: Path,
+) -> RunConfig:
+    """Collect inputs for interactive runs."""
+    last_end = history.get("last_end")
+    last_end_dt = parse_date(last_end) if last_end else None
+
+    platform, db_path = resolve_platform_and_db()
+    dates = resolve_date_range(last_end_dt)
+
+    conv_filter = prompt("Conversation filter (comma-separated, enter to skip)", default="")
+    use_caller_id = yes_no("Use caller ID instead of Me", default=True)
+
+    options = ExportOptions(
+        platform=platform,
+        db_path=db_path,
+        conv_filter=conv_filter,
+        use_caller_id=use_caller_id,
+        copy_method="full",
+        output_format="txt",
+    )
+    paths = PathsConfig(
+        export_path=resolve_output_path(export_base),
+        contacts_json=contacts_path,
+        history_json=history_path,
+    )
+    labels = resolve_user_labels()
+
+    return RunConfig(options=options, dates=dates, paths=paths, labels=labels)
+
+
+def collect_inputs_cli(
+    args: argparse.Namespace,
+    export_base: Path,
+    history_path: Path,
+    contacts_path: Path,
+) -> RunConfig:
+    """Collect inputs for non-interactive runs."""
+    options = ExportOptions(
+        platform=args.platform or "macOS",
+        db_path=args.db_path or "",
+        conv_filter=args.conversation_filter or "",
+        use_caller_id=args.use_caller_id,
+        copy_method=args.copy_method,
+        output_format=args.format,
+    )
+    dates = DateRange(
+        start=parse_date(args.start_date or "") or dt.datetime.now(),
+        end=parse_date(args.end_date or "") or dt.datetime.now(),
+    )
+    default_dir = export_base / dt.datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
+    paths = PathsConfig(
+        export_path=Path(args.export_path or default_dir),
+        contacts_json=contacts_path,
+        history_json=history_path,
+    )
+    labels = UserLabels(me_label=None, my_numbers=[])
+
+    return RunConfig(options=options, dates=dates, paths=paths, labels=labels)
+
+
+def build_export_command(config_run: RunConfig) -> list[str]:
+    """Build the imessage-exporter command."""
+    cmd = [
+        "imessage-exporter",
+        "--format",
+        config_run.options.output_format,
+        "--copy-method",
+        config_run.options.copy_method,
+        "--start-date",
+        date_to_cli(config_run.dates.start),
+        "--export-path",
+        str(config_run.paths.export_path),
+    ]
+
+    if config_run.options.platform == "iOS":
+        db_path = config_run.options.db_path or str(pick_ios_backup())
+        cmd += ["--platform", "iOS", "--db-path", db_path]
+    if config_run.options.conv_filter:
+        cmd += ["--conversation-filter", config_run.options.conv_filter]
+    if config_run.options.use_caller_id:
+        cmd += ["--use-caller-id"]
+    if config_run.dates.end:
+        cmd += ["--end-date", date_to_cli(config_run.dates.end)]
+
+    return cmd
+
+
+def run_exporter(config_run: RunConfig) -> int:
+    """Run imessage-exporter with the resolved config."""
+    cmd = build_export_command(config_run)
+    return run(cmd)
+
+
+def load_contacts_for_platform(config_run: RunConfig) -> dict[str, str]:
+    """Load contacts based on selected platform."""
+    if config_run.options.platform == "iOS":
+        return load_contacts_from_ios_backup(Path(config_run.options.db_path))
+    return load_contacts_from_macos()
+
+
+def ensure_export_dir(path: Path) -> None:
+    """Ensure the export directory exists."""
+    path.mkdir(parents=True, exist_ok=True)
+
+
+def update_history_end(history: dict, end_dt: dt.datetime | None) -> None:
+    """Update history with the latest end date."""
+    history["last_end"] = end_dt.isoformat(sep=" ") if isinstance(end_dt, dt.datetime) else ""
 
 
 def main() -> int:
     """Run the CLI entrypoint."""
     parser = build_arg_parser()
     args = parser.parse_args()
+    configure_logging(args.verbose)
 
     if not shutil.which("imessage-exporter"):
         eprint("imessage-exporter not found in PATH.")
         return 1
 
+    export_base = config.base_output_dir()
+    ensure_export_dir(export_base)
+
+    history_path = resolve_history_path(export_base, args)
+    contacts_path = resolve_contacts_path(export_base, args)
+    history = load_history(history_path)
+
     interactive = not args.non_interactive and len(sys.argv) == 1
-
-    base_output = BASE_OUTPUT_DIR
-    base_output.mkdir(parents=True, exist_ok=True)
-
-    history = load_history(base_output)
-    last_end = history.get("last_end")
-    last_end_dt = parse_date(last_end) if last_end else None
-
     if interactive:
-        platform = prompt("Platform (macOS/iOS)", default="macOS")
-        platform = "iOS" if platform.lower().startswith("i") else "macOS"
-        if platform == "iOS":
-            backup_root = pick_ios_backup()
-            db_path = str(backup_root)
-        else:
-            db_path = ""
-
-        default_start = ""
-        if last_end_dt:
-            default_start = last_end_dt.strftime("%Y-%m-%d")
-        start_text = prompt("Start date (natural language)", default=default_start)
-        start_dt = parse_date(start_text) or dt.datetime.now()
-
-        end_text = prompt("End date (natural language, enter for now)", default="now")
-        end_dt = parse_date(end_text) or dt.datetime.now()
-
-        conv_filter = prompt("Conversation filter (comma-separated, enter to skip)", default="")
-        use_caller_id = yes_no("Use caller ID instead of Me", default=True)
-        copy_method = "full"
-
-        label = prompt("Output label (enter for timestamp)", default="")
-        if label:
-            subdir = sanitize_label(label)
-        else:
-            subdir = dt.datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
-        export_path = base_output / subdir
-
-        me_label = prompt("Label for your own number (enter to skip)", default="").strip()
-        my_numbers_raw = prompt("Your phone numbers (comma-separated, enter to skip)", default="")
-        my_numbers = [n.strip() for n in my_numbers_raw.split(",") if n.strip()]
+        config_run = collect_inputs_interactive(
+            export_base=export_base,
+            history=history,
+            contacts_path=contacts_path,
+            history_path=history_path,
+        )
     else:
-        platform = args.platform or "macOS"
-        db_path = args.db_path or ""
-        start_dt = parse_date(args.start_date or "") or dt.datetime.now()
-        end_dt = parse_date(args.end_date or "") or dt.datetime.now()
-        conv_filter = args.conversation_filter or ""
-        use_caller_id = args.use_caller_id
-        copy_method = args.copy_method
-        default_dir = base_output / dt.datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
-        export_path = Path(args.export_path or default_dir)
-        me_label = None
-        my_numbers = []
+        config_run = collect_inputs_cli(
+            args=args,
+            export_base=export_base,
+            history_path=history_path,
+            contacts_path=contacts_path,
+        )
 
-    cmd = [
-        "imessage-exporter",
-        "--format",
-        args.format,
-        "--copy-method",
-        copy_method,
-        "--start-date",
-        date_to_cli(start_dt),
-        "--export-path",
-        str(export_path),
-    ]
-
-    if platform == "iOS":
-        cmd += ["--platform", "iOS", "--db-path", db_path or str(pick_ios_backup())]
-    if conv_filter:
-        cmd += ["--conversation-filter", conv_filter]
-    if use_caller_id:
-        cmd += ["--use-caller-id"]
-    if end_dt:
-        cmd += ["--end-date", date_to_cli(end_dt)]
-
-    rc = run(cmd)
+    rc = run_exporter(config_run)
     if rc != 0:
         return rc
 
-    contacts_json_path = base_output / CONTACTS_FILE
-    contacts_json = load_contacts_json(contacts_json_path)
+    contacts_json = load_contacts_json(config_run.paths.contacts_json)
     overrides = contacts_json.get("overrides", {})
 
-    if platform == "iOS":
-        contacts_map = load_contacts_from_ios_backup(Path(db_path))
-    else:
-        contacts_map = load_contacts_from_macos()
+    contacts_map = load_contacts_for_platform(config_run)
 
     postprocess_exports(
-        export_dir=Path(export_path),
-        contacts_map=contacts_map,
-        overrides=overrides,
-        me_label=me_label,
-        my_numbers=my_numbers,
+        PostprocessContext(
+            export_dir=config_run.paths.export_path,
+            contacts_map=contacts_map,
+            overrides=overrides,
+            labels=config_run.labels,
+        )
     )
 
     contacts_json["overrides"] = overrides
-    save_contacts_json(contacts_json_path, contacts_json)
+    save_contacts_json(config_run.paths.contacts_json, contacts_json)
 
-    history["last_end"] = end_dt.isoformat(sep=" ") if isinstance(end_dt, dt.datetime) else ""
-    save_history(base_output, history)
+    update_history_end(history, config_run.dates.end)
+    save_history(config_run.paths.history_json, history)
 
-    eprint(f"Export complete: {export_path}")
+    eprint(f"Export complete: {config_run.paths.export_path}")
     return 0
 
 
