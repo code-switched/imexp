@@ -1,5 +1,6 @@
 # Custom Folders
 /.refs
+/.pylintcache
 /data/logs
 /data/base
 /data/config/
