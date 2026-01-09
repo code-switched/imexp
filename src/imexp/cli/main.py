@@ -16,6 +16,7 @@ from dataclasses import dataclass
 import dateparser
 
 from imexp.cli import config
+from imexp.core.utils.helpformatter import ColourHelpFormatter
 
 
 IOS_CONTACTS_REL = Path("31/31bb7ba8914766d4ba40d6dfb6113c8b614be442")
@@ -390,9 +391,8 @@ def postprocess_exports(context: PostprocessContext, ask_for_missing: bool = Tru
             file_path.rename(file_path.with_name(new_name))
 
 
-def build_export_parser() -> argparse.ArgumentParser:
-    """Build the CLI parser for exports."""
-    parser = argparse.ArgumentParser(description="Export messages with imessage-exporter")
+def add_export_args(parser: argparse.ArgumentParser) -> None:
+    """Add export arguments to a parser."""
     parser.add_argument("--platform", choices=["macOS", "iOS"], help="Source platform")
     parser.add_argument("--db-path", help="Path to macOS chat.db or iOS backup root")
     parser.add_argument("--format", default="txt", choices=["txt", "html"])
@@ -408,12 +408,21 @@ def build_export_parser() -> argparse.ArgumentParser:
     parser.add_argument("--history-json", help="Path to history JSON")
     parser.add_argument("--non-interactive", action="store_true")
     parser.add_argument("--verbose", action="store_true")
-    return parser
 
 
-def build_relabel_parser() -> argparse.ArgumentParser:
-    """Build the CLI parser for relabeling exports."""
-    parser = argparse.ArgumentParser(description="Relabel existing exports")
+def build_export_parser(subparsers: argparse._SubParsersAction) -> None:
+    """Register the export subcommand parser."""
+    parser = subparsers.add_parser(
+        "export",
+        help="Export messages via imessage-exporter",
+        formatter_class=ColourHelpFormatter,
+    )
+    add_export_args(parser)
+    parser.set_defaults(command="export")
+
+
+def add_relabel_args(parser: argparse.ArgumentParser) -> None:
+    """Add relabel arguments to a parser."""
     parser.add_argument("--platform", choices=["macOS", "iOS"], help="Source platform")
     parser.add_argument("--db-path", help="Path to macOS chat.db or iOS backup root")
     parser.add_argument("--export-path", help="Export directory to relabel")
@@ -421,8 +430,39 @@ def build_relabel_parser() -> argparse.ArgumentParser:
     parser.add_argument("--history-json", help="Path to history JSON")
     parser.add_argument("--me-label", help="Label for your own number")
     parser.add_argument("--my-numbers", help="Comma-separated numbers for your label")
+    parser.add_argument("--contacts-only", action="store_true", help="Use contacts.json only")
     parser.add_argument("--non-interactive", action="store_true")
     parser.add_argument("--verbose", action="store_true")
+
+
+def build_relabel_parser(subparsers: argparse._SubParsersAction) -> None:
+    """Register the relabel subcommand parser."""
+    parser = subparsers.add_parser(
+        "relabel",
+        help="Relabel existing exports",
+        formatter_class=ColourHelpFormatter,
+    )
+    add_relabel_args(parser)
+    parser.set_defaults(command="relabel")
+
+
+def build_root_parser() -> argparse.ArgumentParser:
+    """Build the root CLI parser with subcommands."""
+    parser = argparse.ArgumentParser(
+        description="imexp CLI",
+        formatter_class=ColourHelpFormatter,
+    )
+    subparsers = parser.add_subparsers(dest="command")
+    build_export_parser(subparsers)
+    build_relabel_parser(subparsers)
+    return parser
+
+
+def build_export_fallback_parser() -> argparse.ArgumentParser:
+    """Build a parser for implicit export defaults."""
+    parser = argparse.ArgumentParser(add_help=False)
+    add_export_args(parser)
+    parser.set_defaults(command="export")
     return parser
 
 
@@ -656,10 +696,10 @@ def resolve_relabel_paths(
     return select_export_path(export_base)
 
 
-def resolve_relabel_labels(args: argparse.Namespace, interactive: bool) -> UserLabels:
+def resolve_relabel_labels(args: argparse.Namespace) -> UserLabels:
     """Resolve labels for relabeling runs."""
-    if not interactive:
-        return resolve_user_labels(args.me_label, args.my_numbers)
+    if args.contacts_only:
+        return UserLabels(me_label=None, my_numbers=[])
     return resolve_user_labels(args.me_label, args.my_numbers)
 
 
@@ -672,7 +712,7 @@ def run_relabel(
     """Relabel an existing export directory."""
     export_path = resolve_relabel_paths(export_base, args, interactive)
     platform, db_path = resolve_platform_and_db(args.platform, args.db_path, interactive)
-    labels = resolve_relabel_labels(args, interactive)
+    labels = resolve_relabel_labels(args)
 
     contacts_json = load_contacts_json(contacts_path)
     overrides = contacts_json.get("overrides", {})
@@ -695,13 +735,14 @@ def run_relabel(
 
 def main() -> None:
     """Run the CLI entrypoint."""
-    command = sys.argv[1] if len(sys.argv) > 1 else "export"
-    if command == "relabel":
-        parser = build_relabel_parser()
-        args = parser.parse_args(sys.argv[2:])
-    else:
-        parser = build_export_parser()
-        args = parser.parse_args(sys.argv[1:])
+    parser = build_root_parser()
+    args = parser.parse_args()
+    command = args.command or "export"
+    if args.command is None and len(sys.argv) > 1:
+        args = parser.parse_args(["export", *sys.argv[1:]])
+        command = "export"
+    if args.command is None and len(sys.argv) == 1:
+        args = build_export_fallback_parser().parse_args([])
         command = "export"
 
     configure_logging(args.verbose)

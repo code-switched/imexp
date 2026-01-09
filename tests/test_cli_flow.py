@@ -11,6 +11,17 @@ import pytest
 from imexp.cli import main as cli
 
 
+def make_three_dirs(base: Path) -> tuple[Path, Path, Path]:
+    """Create three sibling directories for ordering tests."""
+    first = base / "first"
+    second = base / "second"
+    third = base / "third"
+    first.mkdir()
+    second.mkdir()
+    third.mkdir()
+    return first, second, third
+
+
 def input_sequence(values: list[str]):
     """Build an input replacement that yields provided values."""
     iterator = iter(values)
@@ -164,12 +175,7 @@ def test_update_history_end() -> None:
 
 def test_list_recent_exports(tmp_path: Path) -> None:
     """Recent exports are ordered by mtime."""
-    first = tmp_path / "first"
-    second = tmp_path / "second"
-    third = tmp_path / "third"
-    first.mkdir()
-    second.mkdir()
-    third.mkdir()
+    first, second, third = make_three_dirs(tmp_path)
     os.utime(first, (1, 1))
     os.utime(second, (2, 2))
     os.utime(third, (3, 3))
