@@ -1,4 +1,6 @@
 
+"""CLI wrapper for imessage-exporter with contact post-processing."""
+
 import re
 import sys
 import json
@@ -21,16 +23,19 @@ HISTORY_FILE = "history.json"
 
 
 def eprint(msg: str) -> None:
+    """Print to stderr."""
     print(msg, file=sys.stderr)
 
 
 def run(cmd: list[str]) -> int:
+    """Run a subprocess command and return the exit code."""
     eprint("Running:")
     eprint("  " + " ".join(cmd))
     return subprocess.call(cmd)
 
 
 def prompt(text: str, default: str | None = None) -> str:
+    """Prompt for input with an optional default."""
     if default:
         prompt_text = f"{text} [{default}]: "
     else:
@@ -40,6 +45,7 @@ def prompt(text: str, default: str | None = None) -> str:
 
 
 def yes_no(text: str, default: bool = True) -> bool:
+    """Prompt for a yes/no answer."""
     hint = "Y/n" if default else "y/N"
     val = input(f"{text} ({hint}): ").strip().lower()
     if not val:
@@ -48,11 +54,13 @@ def yes_no(text: str, default: bool = True) -> bool:
 
 
 def sanitize_label(label: str) -> str:
+    """Convert a label to a filesystem-safe slug."""
     safe = re.sub(r"[^A-Za-z0-9._-]+", "-", label.strip())
     return safe.strip("-") or "export"
 
 
 def list_ios_backups(root: Path) -> list[dict]:
+    """Enumerate iOS backups and their metadata."""
     backups = []
     if not root.exists():
         return backups
@@ -80,6 +88,7 @@ def list_ios_backups(root: Path) -> list[dict]:
 
 
 def pick_ios_backup() -> Path:
+    """Prompt to choose an iOS backup folder."""
     backups = list_ios_backups(IOS_BACKUP_ROOT)
     if not backups:
         eprint(f"No iOS backups found in {IOS_BACKUP_ROOT}")
@@ -98,6 +107,7 @@ def pick_ios_backup() -> Path:
 
 
 def parse_date(text: str) -> dt.datetime | None:
+    """Parse a natural language date string."""
     if not text:
         return None
     return dateparser.parse(
@@ -107,10 +117,12 @@ def parse_date(text: str) -> dt.datetime | None:
 
 
 def date_to_cli(d: dt.datetime) -> str:
+    """Format a date for CLI arguments."""
     return d.strftime("%Y-%m-%d")
 
 
 def load_history(base_dir: Path) -> dict:
+    """Load export history from disk."""
     history_path = base_dir / HISTORY_FILE
     if not history_path.exists():
         return {}
@@ -121,15 +133,18 @@ def load_history(base_dir: Path) -> dict:
 
 
 def save_history(base_dir: Path, history: dict) -> None:
+    """Persist export history to disk."""
     history_path = base_dir / HISTORY_FILE
     history_path.write_text(json.dumps(history, indent=2, sort_keys=True))
 
 
 def normalize_email(email: str) -> str:
+    """Normalize emails for matching."""
     return email.strip().strip("<>").lower()
 
 
 def phone_keys(raw: str) -> list[str]:
+    """Generate normalized lookup keys for a phone number."""
     if "urn:" in raw:
         return []
     digits = re.sub(r"\D", "", raw)
@@ -143,6 +158,7 @@ def phone_keys(raw: str) -> list[str]:
 
 
 def load_contacts_from_macos() -> dict[str, str]:
+    """Load contacts from the macOS AddressBook database."""
     base = Path("~/Library/Application Support/AddressBook").expanduser()
     sources = list(base.glob("Sources/*/AddressBook-v22.abcddb"))
     if (base / "AddressBook-v22.abcddb").exists():
@@ -181,6 +197,7 @@ def load_contacts_from_macos() -> dict[str, str]:
 
 
 def load_contacts_from_ios_backup(backup_root: Path) -> dict[str, str]:
+    """Load contacts from an iOS backup database."""
     contacts_db = backup_root / IOS_CONTACTS_REL
     if not contacts_db.exists():
         return {}
@@ -217,6 +234,7 @@ def load_contacts_from_ios_backup(backup_root: Path) -> dict[str, str]:
 
 
 def load_contacts_json(path: Path) -> dict:
+    """Load persisted overrides from JSON."""
     if not path.exists():
         return {"overrides": {}}
     try:
@@ -226,10 +244,12 @@ def load_contacts_json(path: Path) -> dict:
 
 
 def save_contacts_json(path: Path, data: dict) -> None:
+    """Persist overrides to JSON."""
     path.write_text(json.dumps(data, indent=2, sort_keys=True))
 
 
 def extract_tokens_from_filename(name: str) -> set[str]:
+    """Extract phone numbers and emails from a filename."""
     stem = Path(name).stem
     tokens = set()
     tokens.update(re.findall(r"\+?\d{7,15}", stem))
@@ -250,6 +270,7 @@ def build_replacements(
     extra_numbers: list[str],
     me_label: str | None,
 ) -> dict[str, str]:
+    """Combine contact data with overrides into a replacement map."""
     repl = {}
     for k, v in contacts_map.items():
         repl[k] = v
@@ -263,6 +284,7 @@ def build_replacements(
 
 
 def replace_in_text(text: str, key: str, value: str) -> str:
+    """Replace a key with a value in arbitrary text."""
     if "@" in key:
         pattern = re.compile(re.escape(key), re.IGNORECASE)
         return pattern.sub(value, text)
@@ -280,6 +302,7 @@ def postprocess_exports(
     my_numbers: list[str],
     ask_for_missing: bool = True,
 ) -> None:
+    """Rewrite export files and names using contact data."""
     txt_files = list(export_dir.glob("*.txt"))
     if not txt_files:
         return
@@ -318,6 +341,7 @@ def postprocess_exports(
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
+    """Build the CLI argument parser."""
     p = argparse.ArgumentParser(description="Interactive wrapper for imessage-exporter")
     p.add_argument("--platform", choices=["macOS", "iOS"], help="Source platform")
     p.add_argument("--db-path", help="Path to macOS chat.db or iOS backup root")
@@ -333,6 +357,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
 
 def main() -> int:
+    """Run the CLI entrypoint."""
     parser = build_arg_parser()
     args = parser.parse_args()
 
@@ -389,7 +414,8 @@ def main() -> int:
         conv_filter = args.conversation_filter or ""
         use_caller_id = args.use_caller_id
         copy_method = args.copy_method
-        export_path = Path(args.export_path or base_output / dt.datetime.now().strftime("%Y-%m-%d-%H-%M-%S"))
+        default_dir = base_output / dt.datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
+        export_path = Path(args.export_path or default_dir)
         me_label = None
         my_numbers = []
 
