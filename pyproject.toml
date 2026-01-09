@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=80.9.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "imexp"
+version = "0.0.1"
+description = "A tool for the task at hand"
+authors = [{name = "Your Name", email = "your.name@example.com"}]
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "dateparser==1.2.2",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pylint==4.0.4",
+    "pytest==9.0.2",
+    "pytest-cov==7.0.0"
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[project.scripts]
+imexp = "imexp.__main__:main"
