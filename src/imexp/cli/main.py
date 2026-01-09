@@ -393,24 +393,27 @@ def postprocess_exports(context: PostprocessContext, ask_for_missing: bool = Tru
 
 def add_export_args(parser: argparse.ArgumentParser) -> None:
     """Add export arguments to a parser."""
-    parser.add_argument("--platform", choices=["macOS", "iOS"], help="Source platform")
-    parser.add_argument("--db-path", help="Path to macOS chat.db or iOS backup root")
-    parser.add_argument("--format", default="txt", choices=["txt", "html"])
+    parser.add_argument("-p", "--platform", choices=["macOS", "iOS"], help="Source platform")
+    parser.add_argument("-d", "--db-path", help="Path to macOS chat.db or iOS backup root")
+    parser.add_argument("-f", "--format", default="txt", choices=["txt", "html"])
     parser.add_argument(
-        "--copy-method", default="full", choices=["disabled", "clone", "basic", "full"]
+        "-c",
+        "--copy-method",
+        default="full",
+        choices=["disabled", "clone", "basic", "full"],
     )
-    parser.add_argument("--start-date", help="Start date (natural language)")
-    parser.add_argument("--end-date", help="End date (natural language)")
-    parser.add_argument("--use-caller-id", action="store_true")
-    parser.add_argument("--conversation-filter", help="Comma-separated filter string")
-    parser.add_argument("--export-path", help="Output directory")
-    parser.add_argument("--contacts-json", help="Path to contacts overrides JSON")
-    parser.add_argument("--history-json", help="Path to history JSON")
-    parser.add_argument("--non-interactive", action="store_true")
-    parser.add_argument("--verbose", action="store_true")
+    parser.add_argument("-s", "--start-date", help="Start date (natural language)")
+    parser.add_argument("-e", "--end-date", help="End date (natural language)")
+    parser.add_argument("-u", "--use-caller-id", action="store_true")
+    parser.add_argument("-k", "--conversation-filter", help="Comma-separated filter string")
+    parser.add_argument("-o", "--export-path", help="Output directory")
+    parser.add_argument("-j", "--contacts-json", help="Path to contacts overrides JSON")
+    parser.add_argument("-y", "--history-json", help="Path to history JSON")
+    parser.add_argument("-n", "--non-interactive", action="store_true")
+    parser.add_argument("-v", "--verbose", action="store_true")
 
 
-def build_export_parser(subparsers: argparse._SubParsersAction) -> None:
+def build_export_parser(subparsers: argparse._SubParsersAction) -> argparse.ArgumentParser:
     """Register the export subcommand parser."""
     parser = subparsers.add_parser(
         "export",
@@ -419,23 +422,23 @@ def build_export_parser(subparsers: argparse._SubParsersAction) -> None:
     )
     add_export_args(parser)
     parser.set_defaults(command="export")
-
+    return parser
 
 def add_relabel_args(parser: argparse.ArgumentParser) -> None:
     """Add relabel arguments to a parser."""
-    parser.add_argument("--platform", choices=["macOS", "iOS"], help="Source platform")
-    parser.add_argument("--db-path", help="Path to macOS chat.db or iOS backup root")
-    parser.add_argument("--export-path", help="Export directory to relabel")
-    parser.add_argument("--contacts-json", help="Path to contacts overrides JSON")
-    parser.add_argument("--history-json", help="Path to history JSON")
-    parser.add_argument("--me-label", help="Label for your own number")
-    parser.add_argument("--my-numbers", help="Comma-separated numbers for your label")
-    parser.add_argument("--contacts-only", action="store_true", help="Use contacts.json only")
-    parser.add_argument("--non-interactive", action="store_true")
-    parser.add_argument("--verbose", action="store_true")
+    parser.add_argument("-p", "--platform", choices=["macOS", "iOS"], help="Source platform")
+    parser.add_argument("-d", "--db-path", help="Path to macOS chat.db or iOS backup root")
+    parser.add_argument("-o", "--export-path", help="Export directory to relabel")
+    parser.add_argument("-j", "--contacts-json", help="Path to contacts overrides JSON")
+    parser.add_argument("-y", "--history-json", help="Path to history JSON")
+    parser.add_argument("-m", "--me-label", help="Label for your own number")
+    parser.add_argument("-b", "--my-numbers", help="Comma-separated numbers for your label")
+    parser.add_argument("-s", "--contacts-only", action="store_true", help="Use contacts.json only")
+    parser.add_argument("-n", "--non-interactive", action="store_true")
+    parser.add_argument("-v", "--verbose", action="store_true")
 
 
-def build_relabel_parser(subparsers: argparse._SubParsersAction) -> None:
+def build_relabel_parser(subparsers: argparse._SubParsersAction) -> argparse.ArgumentParser:
     """Register the relabel subcommand parser."""
     parser = subparsers.add_parser(
         "relabel",
@@ -444,6 +447,7 @@ def build_relabel_parser(subparsers: argparse._SubParsersAction) -> None:
     )
     add_relabel_args(parser)
     parser.set_defaults(command="relabel")
+    return parser
 
 
 def build_root_parser() -> argparse.ArgumentParser:
