@@ -24,4 +24,4 @@ dev = [
 testpaths = ["tests"]
 
 [project.scripts]
-imexp = "imexp.__main__:main"
+imexp = "imexp.cli.main:main"

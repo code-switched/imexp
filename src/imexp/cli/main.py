@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+
 import re
 import sys
 import json
@@ -10,10 +10,7 @@ import subprocess
 import datetime as dt
 from pathlib import Path
 
-try:
-    import dateparser  # type: ignore
-except Exception:  # pragma: no cover - user runtime only
-    dateparser = None
+import dateparser
 
 
 IOS_BACKUP_ROOT = Path("~/Library/Application Support/MobileSync/Backup").expanduser()
@@ -25,13 +22,6 @@ HISTORY_FILE = "history.json"
 
 def eprint(msg: str) -> None:
     print(msg, file=sys.stderr)
-
-
-def require_dateparser() -> None:
-    if dateparser is None:
-        eprint("Missing dependency: dateparser")
-        eprint("Install with: pip install dateparser")
-        sys.exit(2)
 
 
 def run(cmd: list[str]) -> int:
@@ -108,7 +98,6 @@ def pick_ios_backup() -> Path:
 
 
 def parse_date(text: str) -> dt.datetime | None:
-    require_dateparser()
     if not text:
         return None
     return dateparser.parse(
@@ -241,9 +230,17 @@ def save_contacts_json(path: Path, data: dict) -> None:
 
 
 def extract_tokens_from_filename(name: str) -> set[str]:
+    stem = Path(name).stem
     tokens = set()
-    tokens.update(re.findall(r"\+?\d{7,15}", name))
-    tokens.update(re.findall(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}", name))
+    tokens.update(re.findall(r"\+?\d{7,15}", stem))
+    email_pattern = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
+    for match in email_pattern.findall(stem):
+        if "_" in match:
+            for part in match.split("_"):
+                if email_pattern.fullmatch(part):
+                    tokens.add(part)
+        else:
+            tokens.add(match)
     return tokens
 
 
