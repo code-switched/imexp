@@ -36,12 +36,15 @@ class DateRange:
 class ExportOptions:
     """CLI options that affect exporter behavior."""
 
-    platform: str
-    db_path: str
+    platform: str | None
+    db_path: str | None
     conv_filter: str
     use_caller_id: bool
     copy_method: str
     output_format: str
+    diagnostics: bool
+    no_lazy: bool
+    version: bool
 
 
 @dataclass(frozen=True)
@@ -403,12 +406,15 @@ def add_export_args(parser: argparse.ArgumentParser) -> None:
         choices=["disabled", "clone", "basic", "full"],
     )
     parser.add_argument("-s", "--start-date", help="Start date (natural language)")
-    parser.add_argument("-e", "--end-date", help="End date (natural language)")
+    parser.add_argument("-e", "--end-date", help="End date (natural language, before this date)")
     parser.add_argument("-u", "--use-caller-id", action="store_true")
     parser.add_argument("-k", "--conversation-filter", help="Comma-separated filter string")
     parser.add_argument("-o", "--export-path", help="Output directory")
     parser.add_argument("-j", "--contacts-json", help="Path to contacts overrides JSON")
     parser.add_argument("-y", "--history-json", help="Path to history JSON")
+    parser.add_argument("-g", "--diagnostics", action="store_true")
+    parser.add_argument("-l", "--no-lazy", action="store_true")
+    parser.add_argument("-r", "--version", action="store_true", help="Show exporter version")
     parser.add_argument("-n", "--non-interactive", action="store_true")
     parser.add_argument("-v", "--verbose", action="store_true")
 
@@ -482,7 +488,7 @@ def resolve_history_path(export_base: Path, args: argparse.Namespace) -> Path:
 
 def resolve_platform_and_db(
     platform: str | None, db_path: str | None, interactive: bool
-) -> tuple[str, str]:
+) -> tuple[str | None, str | None]:
     """Resolve platform and db path."""
     if platform:
         selected = "iOS" if platform.lower().startswith("i") else "macOS"
@@ -496,7 +502,7 @@ def resolve_platform_and_db(
         return selected, ""
 
     if not interactive:
-        return "macOS", ""
+        return None, db_path
 
     platform = prompt("Platform (macOS/iOS)", default="macOS")
     selected = "iOS" if platform.lower().startswith("i") else "macOS"
@@ -512,7 +518,7 @@ def resolve_date_range(last_end_dt: dt.datetime | None) -> DateRange:
     start_text = prompt("Start date (natural language)", default=default_start)
     start_dt = parse_date(start_text) or dt.datetime.now()
 
-    end_text = prompt("End date (natural language, enter for now)", default="now")
+    end_text = prompt("End date (natural language, before this date)", default="now")
     end_dt = parse_date(end_text) or dt.datetime.now()
     return DateRange(start=start_dt, end=end_dt)
 
@@ -563,6 +569,9 @@ def collect_inputs_interactive(
         use_caller_id=use_caller_id,
         copy_method="full",
         output_format="txt",
+        diagnostics=False,
+        no_lazy=False,
+        version=False,
     )
     paths = PathsConfig(
         export_path=resolve_output_path(export_base),
@@ -589,6 +598,9 @@ def collect_inputs_cli(
         use_caller_id=args.use_caller_id,
         copy_method=args.copy_method,
         output_format=args.format,
+        diagnostics=args.diagnostics,
+        no_lazy=args.no_lazy,
+        version=args.version,
     )
     dates = DateRange(
         start=parse_date(args.start_date or "") or dt.datetime.now(),
@@ -619,9 +631,18 @@ def build_export_command(config_run: RunConfig) -> list[str]:
         str(config_run.paths.export_path),
     ]
 
+    if config_run.options.diagnostics:
+        cmd.append("--diagnostics")
+    if config_run.options.no_lazy:
+        cmd.append("--no-lazy")
+    if config_run.options.version:
+        cmd.append("--version")
+
     if config_run.options.platform == "iOS":
         db_path = config_run.options.db_path or str(pick_ios_backup())
         cmd += ["--platform", "iOS", "--db-path", db_path]
+    if config_run.options.platform is None and config_run.options.db_path:
+        cmd += ["--db-path", config_run.options.db_path]
     if config_run.options.conv_filter:
         cmd += ["--conversation-filter", config_run.options.conv_filter]
     if config_run.options.use_caller_id:

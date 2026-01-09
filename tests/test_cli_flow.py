@@ -73,6 +73,9 @@ def test_build_export_command_macos(tmp_path: Path) -> None:
             use_caller_id=True,
             copy_method="full",
             output_format="txt",
+            diagnostics=False,
+            no_lazy=False,
+            version=False,
         ),
         dates=cli.DateRange(
             start=dt.datetime(2024, 1, 1, 0, 0, 0),
@@ -103,6 +106,9 @@ def test_build_export_command_ios(tmp_path: Path) -> None:
             use_caller_id=False,
             copy_method="full",
             output_format="html",
+            diagnostics=False,
+            no_lazy=False,
+            version=False,
         ),
         dates=cli.DateRange(
             start=dt.datetime(2024, 1, 1, 0, 0, 0),
