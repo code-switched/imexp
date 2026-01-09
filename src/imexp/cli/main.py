@@ -96,12 +96,12 @@ def eprint(msg: str) -> None:
     print(msg, file=sys.stderr)
 
 
-def run(cmd: list[str]) -> int:
-    """Run a subprocess command and return the exit code."""
+def run(cmd: list[str]) -> None:
+    """Run a subprocess command."""
     logger = get_logger()
     logger.info("Running:")
     logger.info("  %s", " ".join(cmd))
-    return subprocess.call(cmd)
+    subprocess.check_call(cmd)
 
 
 def prompt(text: str, default: str | None = None) -> str:
@@ -140,19 +140,16 @@ def list_ios_backups(root: Path) -> list[dict]:
         info_path = entry / "Info.plist"
         if not info_path.exists():
             continue
-        try:
-            with info_path.open("rb") as f:
-                info = plistlib.load(f)
-            backups.append(
-                {
-                    "path": entry,
-                    "device_name": info.get("Device Name", "Unknown"),
-                    "product_version": info.get("Product Version", "Unknown"),
-                    "last_backup": info.get("Last Backup Date"),
-                }
-            )
-        except (OSError, plistlib.InvalidFileException, ValueError):
-            continue
+        with info_path.open("rb") as f:
+            info = plistlib.load(f)
+        backups.append(
+            {
+                "path": entry,
+                "device_name": info.get("Device Name", "Unknown"),
+                "product_version": info.get("Product Version", "Unknown"),
+                "last_backup": info.get("Last Backup Date"),
+            }
+        )
     backups.sort(key=lambda b: b["last_backup"] or dt.datetime.min, reverse=True)
     return backups
 
@@ -161,8 +158,7 @@ def pick_ios_backup() -> Path:
     """Prompt to choose an iOS backup folder."""
     backups = list_ios_backups(config.IOS_BACKUP_ROOT)
     if not backups:
-        eprint(f"No iOS backups found in {config.IOS_BACKUP_ROOT}")
-        sys.exit(1)
+        raise RuntimeError(f"No iOS backups found in {config.IOS_BACKUP_ROOT}")
     eprint("Detected iOS backups:")
     for i, backup in enumerate(backups, start=1):
         last = backup["last_backup"]
@@ -198,10 +194,10 @@ def load_history(history_path: Path) -> dict:
     """Load export history from disk."""
     if not history_path.exists():
         return {}
-    try:
-        return json.loads(history_path.read_text())
-    except (OSError, json.JSONDecodeError):
+    contents = history_path.read_text()
+    if not contents.strip():
         return {}
+    return json.loads(contents)
 
 
 def save_history(history_path: Path, history: dict) -> None:
@@ -236,8 +232,7 @@ def load_contacts_from_macos() -> dict[str, str]:
         sources.append(base / "AddressBook-v22.abcddb")
     mapping: dict[str, str] = {}
     for db in sources:
-        try:
-            conn = sqlite3.connect(db)
+        with sqlite3.connect(db) as conn:
             cur = conn.cursor()
             cur.execute(
                 """
@@ -257,13 +252,6 @@ def load_contacts_from_macos() -> dict[str, str]:
                 if phone:
                     for key in phone_keys(phone):
                         mapping[key] = name
-        except sqlite3.Error:
-            continue
-        finally:
-            try:
-                conn.close()
-            except sqlite3.Error:
-                pass
     return mapping
 
 
@@ -273,8 +261,7 @@ def load_contacts_from_ios_backup(backup_root: Path) -> dict[str, str]:
     if not contacts_db.exists():
         return {}
     mapping: dict[str, str] = {}
-    try:
-        conn = sqlite3.connect(contacts_db)
+    with sqlite3.connect(contacts_db) as conn:
         cur = conn.cursor()
         cur.execute(
             """
@@ -294,13 +281,6 @@ def load_contacts_from_ios_backup(backup_root: Path) -> dict[str, str]:
                 for token in str(phones).split():
                     for key in phone_keys(token):
                         mapping[key] = name
-    except sqlite3.Error:
-        return mapping
-    finally:
-        try:
-            conn.close()
-        except sqlite3.Error:
-            pass
     return mapping
 
 
@@ -308,10 +288,10 @@ def load_contacts_json(path: Path) -> dict:
     """Load persisted overrides from JSON."""
     if not path.exists():
         return {"overrides": {}}
-    try:
-        return json.loads(path.read_text())
-    except (OSError, json.JSONDecodeError):
+    contents = path.read_text()
+    if not contents.strip():
         return {"overrides": {}}
+    return json.loads(contents)
 
 
 def save_contacts_json(path: Path, data: dict) -> None:
@@ -569,10 +549,10 @@ def build_export_command(config_run: RunConfig) -> list[str]:
     return cmd
 
 
-def run_exporter(config_run: RunConfig) -> int:
+def run_exporter(config_run: RunConfig) -> None:
     """Run imessage-exporter with the resolved config."""
     cmd = build_export_command(config_run)
-    return run(cmd)
+    run(cmd)
 
 
 def load_contacts_for_platform(config_run: RunConfig) -> dict[str, str]:
@@ -592,15 +572,14 @@ def update_history_end(history: dict, end_dt: dt.datetime | None) -> None:
     history["last_end"] = end_dt.isoformat(sep=" ") if isinstance(end_dt, dt.datetime) else ""
 
 
-def main() -> int:
+def main() -> None:
     """Run the CLI entrypoint."""
     parser = build_arg_parser()
     args = parser.parse_args()
     configure_logging(args.verbose)
 
     if not shutil.which("imessage-exporter"):
-        eprint("imessage-exporter not found in PATH.")
-        return 1
+        raise FileNotFoundError("imessage-exporter not found in PATH.")
 
     export_base = config.base_output_dir()
     ensure_export_dir(export_base)
@@ -625,9 +604,7 @@ def main() -> int:
             contacts_path=contacts_path,
         )
 
-    rc = run_exporter(config_run)
-    if rc != 0:
-        return rc
+    run_exporter(config_run)
 
     contacts_json = load_contacts_json(config_run.paths.contacts_json)
     overrides = contacts_json.get("overrides", {})
@@ -650,7 +627,6 @@ def main() -> int:
     save_history(config_run.paths.history_json, history)
 
     eprint(f"Export complete: {config_run.paths.export_path}")
-    return 0
 
 
 if __name__ == "__main__":
