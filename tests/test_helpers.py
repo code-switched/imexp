@@ -12,7 +12,12 @@ def test_sanitize_label() -> None:
 def test_phone_keys() -> None:
     """Normalize phone numbers for matching."""
     assert not cli.phone_keys("urn:something")
-    assert cli.phone_keys("(555) 123-4567") == ["5551234567", "+5551234567"]
+    assert cli.phone_keys("(555) 123-4567") == [
+        "5551234567",
+        "+5551234567",
+        "15551234567",
+        "+15551234567",
+    ]
     assert cli.phone_keys("+1 415-555-1212") == [
         "14155551212",
         "+14155551212",

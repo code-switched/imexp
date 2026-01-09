@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import datetime as dt
 from pathlib import Path
 
@@ -23,7 +24,7 @@ def input_sequence(values: list[str]):
 def test_resolve_platform_and_db_macos(monkeypatch: pytest.MonkeyPatch) -> None:
     """Selecting macOS skips backup selection."""
     monkeypatch.setattr("builtins.input", input_sequence(["macOS"]))
-    platform, db_path = cli.resolve_platform_and_db()
+    platform, db_path = cli.resolve_platform_and_db(None, None, True)
     assert platform == "macOS"
     assert db_path == ""
 
@@ -46,7 +47,7 @@ def test_resolve_output_path(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) ->
 def test_resolve_user_labels(monkeypatch: pytest.MonkeyPatch) -> None:
     """User label prompts map inputs into labels."""
     monkeypatch.setattr("builtins.input", input_sequence(["Me", "123, 456"]))
-    labels = cli.resolve_user_labels()
+    labels = cli.resolve_user_labels(None, None)
     assert labels.me_label == "Me"
     assert labels.my_numbers == ["123", "456"]
 
@@ -159,3 +160,20 @@ def test_update_history_end() -> None:
     end_dt = dt.datetime(2024, 1, 2, 3, 4, 5)
     cli.update_history_end(history, end_dt)
     assert history["last_end"] == "2024-01-02 03:04:05"
+
+
+def test_list_recent_exports(tmp_path: Path) -> None:
+    """Recent exports are ordered by mtime."""
+    first = tmp_path / "first"
+    second = tmp_path / "second"
+    third = tmp_path / "third"
+    first.mkdir()
+    second.mkdir()
+    third.mkdir()
+    os.utime(first, (1, 1))
+    os.utime(second, (2, 2))
+    os.utime(third, (3, 3))
+
+    recent = cli.list_recent_exports(tmp_path, limit=2)
+    assert len(recent) == 2
+    assert recent[0] == third

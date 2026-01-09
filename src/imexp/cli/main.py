@@ -218,6 +218,8 @@ def phone_keys(raw: str) -> list[str]:
     if not digits:
         return []
     keys = [digits, f"+{digits}"]
+    if len(digits) == 10:
+        keys.extend([f"1{digits}", f"+1{digits}"])
     if digits.startswith("1") and len(digits) == 11:
         last10 = digits[-10:]
         keys.extend([last10, f"+{last10}"])
@@ -347,7 +349,7 @@ def replace_in_text(text: str, key: str, value: str) -> str:
 
 def postprocess_exports(context: PostprocessContext, ask_for_missing: bool = True) -> None:
     """Rewrite export files and names using contact data."""
-    txt_files = list(context.export_dir.glob("*.txt"))
+    txt_files = list(context.export_dir.rglob("*.txt"))
     if not txt_files:
         return
 
@@ -388,9 +390,9 @@ def postprocess_exports(context: PostprocessContext, ask_for_missing: bool = Tru
             file_path.rename(file_path.with_name(new_name))
 
 
-def build_arg_parser() -> argparse.ArgumentParser:
-    """Build the CLI argument parser."""
-    parser = argparse.ArgumentParser(description="Interactive wrapper for imessage-exporter")
+def build_export_parser() -> argparse.ArgumentParser:
+    """Build the CLI parser for exports."""
+    parser = argparse.ArgumentParser(description="Export messages with imessage-exporter")
     parser.add_argument("--platform", choices=["macOS", "iOS"], help="Source platform")
     parser.add_argument("--db-path", help="Path to macOS chat.db or iOS backup root")
     parser.add_argument("--format", default="txt", choices=["txt", "html"])
@@ -409,6 +411,21 @@ def build_arg_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def build_relabel_parser() -> argparse.ArgumentParser:
+    """Build the CLI parser for relabeling exports."""
+    parser = argparse.ArgumentParser(description="Relabel existing exports")
+    parser.add_argument("--platform", choices=["macOS", "iOS"], help="Source platform")
+    parser.add_argument("--db-path", help="Path to macOS chat.db or iOS backup root")
+    parser.add_argument("--export-path", help="Export directory to relabel")
+    parser.add_argument("--contacts-json", help="Path to contacts overrides JSON")
+    parser.add_argument("--history-json", help="Path to history JSON")
+    parser.add_argument("--me-label", help="Label for your own number")
+    parser.add_argument("--my-numbers", help="Comma-separated numbers for your label")
+    parser.add_argument("--non-interactive", action="store_true")
+    parser.add_argument("--verbose", action="store_true")
+    return parser
+
+
 def resolve_contacts_path(export_base: Path, args: argparse.Namespace) -> Path:
     """Resolve the contacts JSON path from args or defaults."""
     return Path(args.contacts_json or export_base / CONTACTS_FILE)
@@ -419,14 +436,30 @@ def resolve_history_path(export_base: Path, args: argparse.Namespace) -> Path:
     return Path(args.history_json or export_base / HISTORY_FILE)
 
 
-def resolve_platform_and_db() -> tuple[str, str]:
-    """Prompt for platform and db path when interactive."""
+def resolve_platform_and_db(
+    platform: str | None, db_path: str | None, interactive: bool
+) -> tuple[str, str]:
+    """Resolve platform and db path."""
+    if platform:
+        selected = "iOS" if platform.lower().startswith("i") else "macOS"
+        if selected == "iOS":
+            if not db_path and not interactive:
+                raise ValueError("iOS platform requires --db-path in non-interactive mode.")
+            if not db_path:
+                backup_root = pick_ios_backup()
+                return selected, str(backup_root)
+            return selected, db_path
+        return selected, ""
+
+    if not interactive:
+        return "macOS", ""
+
     platform = prompt("Platform (macOS/iOS)", default="macOS")
-    platform = "iOS" if platform.lower().startswith("i") else "macOS"
-    if platform == "iOS":
+    selected = "iOS" if platform.lower().startswith("i") else "macOS"
+    if selected == "iOS":
         backup_root = pick_ios_backup()
-        return platform, str(backup_root)
-    return platform, ""
+        return selected, str(backup_root)
+    return selected, ""
 
 
 def resolve_date_range(last_end_dt: dt.datetime | None) -> DateRange:
@@ -450,8 +483,13 @@ def resolve_output_path(export_base: Path) -> Path:
     return export_base / subdir
 
 
-def resolve_user_labels() -> UserLabels:
-    """Prompt for user labels and numbers."""
+def resolve_user_labels(me_label: str | None, my_numbers_raw: str | None) -> UserLabels:
+    """Resolve user labels and numbers."""
+    if me_label or my_numbers_raw:
+        numbers = my_numbers_raw or ""
+        my_numbers = [n.strip() for n in numbers.split(",") if n.strip()]
+        return UserLabels(me_label=me_label, my_numbers=my_numbers)
+
     me_label = prompt("Label for your own number (enter to skip)", default="").strip()
     my_numbers_raw = prompt("Your phone numbers (comma-separated, enter to skip)", default="")
     my_numbers = [n.strip() for n in my_numbers_raw.split(",") if n.strip()]
@@ -468,7 +506,7 @@ def collect_inputs_interactive(
     last_end = history.get("last_end")
     last_end_dt = parse_date(last_end) if last_end else None
 
-    platform, db_path = resolve_platform_and_db()
+    platform, db_path = resolve_platform_and_db(None, None, True)
     dates = resolve_date_range(last_end_dt)
 
     conv_filter = prompt("Conversation filter (comma-separated, enter to skip)", default="")
@@ -487,7 +525,7 @@ def collect_inputs_interactive(
         contacts_json=contacts_path,
         history_json=history_path,
     )
-    labels = resolve_user_labels()
+    labels = resolve_user_labels(None, None)
 
     return RunConfig(options=options, dates=dates, paths=paths, labels=labels)
 
@@ -499,9 +537,10 @@ def collect_inputs_cli(
     contacts_path: Path,
 ) -> RunConfig:
     """Collect inputs for non-interactive runs."""
+    platform, db_path = resolve_platform_and_db(args.platform, args.db_path, False)
     options = ExportOptions(
-        platform=args.platform or "macOS",
-        db_path=args.db_path or "",
+        platform=platform,
+        db_path=db_path,
         conv_filter=args.conversation_filter or "",
         use_caller_id=args.use_caller_id,
         copy_method=args.copy_method,
@@ -555,10 +594,10 @@ def run_exporter(config_run: RunConfig) -> None:
     run(cmd)
 
 
-def load_contacts_for_platform(config_run: RunConfig) -> dict[str, str]:
+def load_contacts_for_platform(platform: str, db_path: str) -> dict[str, str]:
     """Load contacts based on selected platform."""
-    if config_run.options.platform == "iOS":
-        return load_contacts_from_ios_backup(Path(config_run.options.db_path))
+    if platform == "iOS":
+        return load_contacts_from_ios_backup(Path(db_path))
     return load_contacts_from_macos()
 
 
@@ -572,23 +611,118 @@ def update_history_end(history: dict, end_dt: dt.datetime | None) -> None:
     history["last_end"] = end_dt.isoformat(sep=" ") if isinstance(end_dt, dt.datetime) else ""
 
 
+def list_recent_exports(export_base: Path, limit: int = 3) -> list[Path]:
+    """Return the most recent export directories."""
+    if not export_base.exists():
+        return []
+    candidates = [path for path in export_base.iterdir() if path.is_dir()]
+    candidates.sort(key=lambda path: path.stat().st_mtime, reverse=True)
+    return candidates[:limit]
+
+
+def select_export_path(export_base: Path) -> Path:
+    """Prompt to select a recent export directory."""
+    recent = list_recent_exports(export_base, limit=3)
+    if not recent:
+        raise FileNotFoundError(f"No exports found under {export_base}")
+
+    eprint("Recent exports:")
+    for idx, path in enumerate(recent, start=1):
+        eprint(f"  {idx}) {path}")
+    selection = prompt("Select export (1-3) or enter path", default="1")
+    if selection.isdigit():
+        idx = max(1, min(len(recent), int(selection)))
+        return recent[idx - 1]
+
+    chosen = Path(selection).expanduser()
+    if not chosen.exists():
+        raise FileNotFoundError(f"Export path not found: {chosen}")
+    return chosen
+
+
+def resolve_relabel_paths(
+    export_base: Path, args: argparse.Namespace, interactive: bool
+) -> Path:
+    """Resolve the export path for relabeling."""
+    if args.export_path:
+        chosen = Path(args.export_path).expanduser()
+        if not chosen.exists():
+            raise FileNotFoundError(f"Export path not found: {chosen}")
+        return chosen
+
+    if not interactive:
+        raise ValueError("Relabeling requires --export-path in non-interactive mode.")
+
+    return select_export_path(export_base)
+
+
+def resolve_relabel_labels(args: argparse.Namespace, interactive: bool) -> UserLabels:
+    """Resolve labels for relabeling runs."""
+    if not interactive:
+        return resolve_user_labels(args.me_label, args.my_numbers)
+    return resolve_user_labels(args.me_label, args.my_numbers)
+
+
+def run_relabel(
+    export_base: Path,
+    contacts_path: Path,
+    args: argparse.Namespace,
+    interactive: bool,
+) -> None:
+    """Relabel an existing export directory."""
+    export_path = resolve_relabel_paths(export_base, args, interactive)
+    platform, db_path = resolve_platform_and_db(args.platform, args.db_path, interactive)
+    labels = resolve_relabel_labels(args, interactive)
+
+    contacts_json = load_contacts_json(contacts_path)
+    overrides = contacts_json.get("overrides", {})
+    contacts_map = load_contacts_for_platform(platform, db_path)
+
+    postprocess_exports(
+        PostprocessContext(
+            export_dir=export_path,
+            contacts_map=contacts_map,
+            overrides=overrides,
+            labels=labels,
+        ),
+        ask_for_missing=interactive,
+    )
+
+    contacts_json["overrides"] = overrides
+    save_contacts_json(contacts_path, contacts_json)
+    eprint(f"Relabel complete: {export_path}")
+
+
 def main() -> None:
     """Run the CLI entrypoint."""
-    parser = build_arg_parser()
-    args = parser.parse_args()
-    configure_logging(args.verbose)
+    command = sys.argv[1] if len(sys.argv) > 1 else "export"
+    if command == "relabel":
+        parser = build_relabel_parser()
+        args = parser.parse_args(sys.argv[2:])
+    else:
+        parser = build_export_parser()
+        args = parser.parse_args(sys.argv[1:])
+        command = "export"
 
-    if not shutil.which("imessage-exporter"):
-        raise FileNotFoundError("imessage-exporter not found in PATH.")
+    configure_logging(args.verbose)
 
     export_base = config.base_output_dir()
     ensure_export_dir(export_base)
 
-    history_path = resolve_history_path(export_base, args)
     contacts_path = resolve_contacts_path(export_base, args)
+    interactive = not args.non_interactive and command == "export" and len(sys.argv) == 1
+    relabel_interactive = not args.non_interactive and command == "relabel"
+
+    if command == "relabel":
+        run_relabel(export_base, contacts_path, args, relabel_interactive)
+        return
+
+    if not shutil.which("imessage-exporter"):
+        raise FileNotFoundError("imessage-exporter not found in PATH.")
+
+    history_path = resolve_history_path(export_base, args)
     history = load_history(history_path)
 
-    interactive = not args.non_interactive and len(sys.argv) == 1
     if interactive:
         config_run = collect_inputs_interactive(
             export_base=export_base,
@@ -609,7 +743,9 @@ def main() -> None:
     contacts_json = load_contacts_json(config_run.paths.contacts_json)
     overrides = contacts_json.get("overrides", {})
 
-    contacts_map = load_contacts_for_platform(config_run)
+    contacts_map = load_contacts_for_platform(
+        config_run.options.platform, config_run.options.db_path
+    )
 
     postprocess_exports(
         PostprocessContext(
@@ -617,7 +753,8 @@ def main() -> None:
             contacts_map=contacts_map,
             overrides=overrides,
             labels=config_run.labels,
-        )
+        ),
+        ask_for_missing=interactive,
     )
 
     contacts_json["overrides"] = overrides
