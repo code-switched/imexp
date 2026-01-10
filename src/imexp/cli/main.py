@@ -57,21 +57,12 @@ class PathsConfig:
 
 
 @dataclass(frozen=True)
-class UserLabels:
-    """User label settings for post-processing."""
-
-    me_label: str | None
-    my_numbers: list[str]
-
-
-@dataclass(frozen=True)
 class RunConfig:
     """Resolved settings for an export run."""
 
     options: ExportOptions
     dates: DateRange
     paths: PathsConfig
-    labels: UserLabels
 
 
 @dataclass(frozen=True)
@@ -81,7 +72,6 @@ class PostprocessContext:
     export_dir: Path
     contacts_map: dict[str, str]
     overrides: dict[str, str]
-    labels: UserLabels
 
 
 def get_logger() -> logging.Logger:
@@ -324,8 +314,6 @@ def extract_tokens_from_filename(name: str) -> set[str]:
 def build_replacements(
     overrides: dict[str, str],
     contacts_map: dict[str, str],
-    extra_numbers: list[str],
-    me_label: str | None,
 ) -> dict[str, str]:
     """Combine contact data with overrides into a replacement map."""
     repl = {}
@@ -333,10 +321,6 @@ def build_replacements(
         repl[key] = value
     for key, value in overrides.items():
         repl[key] = value
-    if me_label:
-        for num in extra_numbers:
-            for key in phone_keys(num):
-                repl[key] = me_label
     return repl
 
 
@@ -370,12 +354,7 @@ def postprocess_exports(context: PostprocessContext, ask_for_missing: bool = Tru
                 if name:
                     context.overrides[token] = name
 
-    replacements = build_replacements(
-        context.overrides,
-        context.contacts_map,
-        context.labels.my_numbers,
-        context.labels.me_label,
-    )
+    replacements = build_replacements(context.overrides, context.contacts_map)
     if not replacements:
         return
 
@@ -437,9 +416,12 @@ def add_relabel_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("-o", "--export-path", help="Export directory to relabel")
     parser.add_argument("-j", "--contacts-json", help="Path to contacts overrides JSON")
     parser.add_argument("-y", "--history-json", help="Path to history JSON")
-    parser.add_argument("-m", "--me-label", help="Label for your own number")
-    parser.add_argument("-b", "--my-numbers", help="Comma-separated numbers for your label")
-    parser.add_argument("-s", "--contacts-only", action="store_true", help="Use contacts.json only")
+    parser.add_argument(
+        "-s",
+        "--contacts-only",
+        action="store_true",
+        help="Use contacts.json only and skip prompts",
+    )
     parser.add_argument("-n", "--non-interactive", action="store_true")
     parser.add_argument("-v", "--verbose", action="store_true")
 
@@ -533,19 +515,6 @@ def resolve_output_path(export_base: Path) -> Path:
     return export_base / subdir
 
 
-def resolve_user_labels(me_label: str | None, my_numbers_raw: str | None) -> UserLabels:
-    """Resolve user labels and numbers."""
-    if me_label or my_numbers_raw:
-        numbers = my_numbers_raw or ""
-        my_numbers = [n.strip() for n in numbers.split(",") if n.strip()]
-        return UserLabels(me_label=me_label, my_numbers=my_numbers)
-
-    me_label = prompt("Label for your own number (enter to skip)", default="").strip()
-    my_numbers_raw = prompt("Your phone numbers (comma-separated, enter to skip)", default="")
-    my_numbers = [n.strip() for n in my_numbers_raw.split(",") if n.strip()]
-    return UserLabels(me_label=me_label or None, my_numbers=my_numbers)
-
-
 def collect_inputs_interactive(
     export_base: Path,
     history: dict,
@@ -578,9 +547,8 @@ def collect_inputs_interactive(
         contacts_json=contacts_path,
         history_json=history_path,
     )
-    labels = resolve_user_labels(None, None)
 
-    return RunConfig(options=options, dates=dates, paths=paths, labels=labels)
+    return RunConfig(options=options, dates=dates, paths=paths)
 
 
 def collect_inputs_cli(
@@ -612,9 +580,7 @@ def collect_inputs_cli(
         contacts_json=contacts_path,
         history_json=history_path,
     )
-    labels = UserLabels(me_label=None, my_numbers=[])
-
-    return RunConfig(options=options, dates=dates, paths=paths, labels=labels)
+    return RunConfig(options=options, dates=dates, paths=paths)
 
 
 def build_export_command(config_run: RunConfig) -> list[str]:
@@ -657,6 +623,19 @@ def run_exporter(config_run: RunConfig) -> None:
     """Run imessage-exporter with the resolved config."""
     cmd = build_export_command(config_run)
     run(cmd)
+
+
+def warn_on_date_range(config_run: RunConfig) -> None:
+    """Print a preflight summary for the date range."""
+    start_s = date_to_cli(config_run.dates.start)
+    if config_run.dates.end is None:
+        eprint(f"Date range: {start_s} -> (before now)")
+        return
+
+    end_s = date_to_cli(config_run.dates.end)
+    eprint(f"Date range: {start_s} -> (before {end_s})")
+    if start_s == end_s:
+        eprint("Warning: start and end are the same day; exports may be empty.")
 
 
 def load_contacts_for_platform(platform: str, db_path: str) -> dict[str, str]:
@@ -721,13 +700,6 @@ def resolve_relabel_paths(
     return select_export_path(export_base)
 
 
-def resolve_relabel_labels(args: argparse.Namespace) -> UserLabels:
-    """Resolve labels for relabeling runs."""
-    if args.contacts_only:
-        return UserLabels(me_label=None, my_numbers=[])
-    return resolve_user_labels(args.me_label, args.my_numbers)
-
-
 def run_relabel(
     export_base: Path,
     contacts_path: Path,
@@ -737,7 +709,6 @@ def run_relabel(
     """Relabel an existing export directory."""
     export_path = resolve_relabel_paths(export_base, args, interactive)
     platform, db_path = resolve_platform_and_db(args.platform, args.db_path, interactive)
-    labels = resolve_relabel_labels(args)
 
     contacts_json = load_contacts_json(contacts_path)
     overrides = contacts_json.get("overrides", {})
@@ -748,9 +719,8 @@ def run_relabel(
             export_dir=export_path,
             contacts_map=contacts_map,
             overrides=overrides,
-            labels=labels,
         ),
-        ask_for_missing=interactive,
+        ask_for_missing=interactive and not args.contacts_only,
     )
 
     contacts_json["overrides"] = overrides
@@ -804,6 +774,7 @@ def main() -> None:
             contacts_path=contacts_path,
         )
 
+    warn_on_date_range(config_run)
     run_exporter(config_run)
 
     contacts_json = load_contacts_json(config_run.paths.contacts_json)
@@ -818,7 +789,6 @@ def main() -> None:
             export_dir=config_run.paths.export_path,
             contacts_map=contacts_map,
             overrides=overrides,
-            labels=config_run.labels,
         ),
         ask_for_missing=interactive,
     )

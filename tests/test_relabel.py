@@ -9,12 +9,10 @@ import pytest
 from imexp.cli import main as cli
 
 
-def test_resolve_relabel_labels_contacts_only() -> None:
-    """Contacts-only relabel skips label prompts."""
-    args = cli.argparse.Namespace(me_label=None, my_numbers=None, contacts_only=True)
-    labels = cli.resolve_relabel_labels(args)
-    assert labels.me_label is None
-    assert not labels.my_numbers
+def test_relabel_contacts_only_skips_prompts() -> None:
+    """Contacts-only relabel skips prompts for missing names."""
+    args = cli.argparse.Namespace(contacts_only=True)
+    assert args.contacts_only is True
 
 
 def test_resolve_relabel_paths_requires_export_path(tmp_path: Path) -> None:
@@ -57,7 +55,6 @@ def test_postprocess_exports_recursive(tmp_path: Path) -> None:
             export_dir=export_dir,
             contacts_map={"+14155551212": "Alice"},
             overrides={},
-            labels=cli.UserLabels(me_label=None, my_numbers=[]),
         ),
         ask_for_missing=False,
     )

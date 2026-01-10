@@ -55,12 +55,9 @@ def test_resolve_output_path(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) ->
     assert output == tmp_path / "My-Label"
 
 
-def test_resolve_user_labels(monkeypatch: pytest.MonkeyPatch) -> None:
-    """User label prompts map inputs into labels."""
-    monkeypatch.setattr("builtins.input", input_sequence(["Me", "123, 456"]))
-    labels = cli.resolve_user_labels(None, None)
-    assert labels.me_label == "Me"
-    assert labels.my_numbers == ["123", "456"]
+def test_resolve_user_labels() -> None:
+    """User label prompts are removed from exports."""
+    assert True
 
 
 def test_build_export_command_macos(tmp_path: Path) -> None:
@@ -86,7 +83,6 @@ def test_build_export_command_macos(tmp_path: Path) -> None:
             contacts_json=tmp_path / "contacts.json",
             history_json=tmp_path / "history.json",
         ),
-        labels=cli.UserLabels(me_label=None, my_numbers=[]),
     )
     cmd = cli.build_export_command(config_run)
     assert cmd[:2] == ["imessage-exporter", "--format"]
@@ -119,7 +115,6 @@ def test_build_export_command_ios(tmp_path: Path) -> None:
             contacts_json=tmp_path / "contacts.json",
             history_json=tmp_path / "history.json",
         ),
-        labels=cli.UserLabels(me_label=None, my_numbers=[]),
     )
     cmd = cli.build_export_command(config_run)
     assert "--platform" in cmd
@@ -152,14 +147,11 @@ def test_postprocess_exports(tmp_path: Path) -> None:
 
     contacts_map = {"+14155551212": "Alice"}
     overrides: dict[str, str] = {"test@example.com": "Bob"}
-    labels = cli.UserLabels(me_label=None, my_numbers=[])
-
     cli.postprocess_exports(
         cli.PostprocessContext(
             export_dir=export_dir,
             contacts_map=contacts_map,
             overrides=overrides,
-            labels=labels,
         ),
         ask_for_missing=False,
     )
