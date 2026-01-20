@@ -5,10 +5,12 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "imexp"
 version = "0.0.1"
-description = "A tool for the task at hand"
-authors = [{name = "Your Name", email = "your.name@example.com"}]
+description = "Interactive CLI wrapper for imessage-exporter with contact name resolution and post-processing"
+authors = [{name = "Code", email = "switched.code@gmail.com"}]
 readme = "README.md"
+license = "GPL-3.0-or-later"
 requires-python = ">=3.12"
+keywords = ["imessage", "sms", "export", "backup", "messages", "macos", "ios"]
 dependencies = [
     "dateparser==1.2.2",
 ]
