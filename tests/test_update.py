@@ -176,14 +176,15 @@ def test_resolve_update_target_missing_raises() -> None:
         cli.resolve_update_target(Path("/tmp"), Args(), interactive=False)
 
 
-def test_resolve_update_target_no_path_non_interactive(tmp_path: Path) -> None:
-    """Non-interactive mode without --export-path raises ValueError."""
+def test_resolve_update_target_no_path_returns_none(tmp_path: Path) -> None:
+    """No export path and no existing exports returns None for bootstrap."""
 
     class Args:
         export_path = None
+        conversation_filter = None
 
-    with pytest.raises(ValueError, match="requires --export-path"):
-        cli.resolve_update_target(tmp_path, Args(), interactive=False)
+    result = cli.resolve_update_target(tmp_path, Args(), interactive=False)
+    assert result is None
 
 
 def test_resolve_update_dates_from_meta(tmp_path: Path) -> None:
@@ -242,6 +243,58 @@ def test_list_recent_exports_excludes_staging(tmp_path: Path) -> None:
     names = [p.name for p in recent]
     assert cli.STAGING_DIR not in names
     assert "real-export" in names
+
+
+def test_find_update_target_empty(tmp_path: Path) -> None:
+    """No export dirs returns None."""
+    assert cli.find_update_target(tmp_path, "") is None
+
+
+def test_find_update_target_single_dir(tmp_path: Path) -> None:
+    """Single export dir is returned regardless of filter."""
+    export = tmp_path / "2024-01-01-00-00-00"
+    export.mkdir()
+    assert cli.find_update_target(tmp_path, "anything") == export
+
+
+def test_find_update_target_matches_by_filter(tmp_path: Path) -> None:
+    """When multiple dirs exist, matches by conv_filter in export_meta."""
+    dir_a = tmp_path / "export-a"
+    dir_b = tmp_path / "export-b"
+    dir_a.mkdir()
+    dir_b.mkdir()
+
+    cli.save_export_meta(dir_a, {"conv_filter": "alice"})
+    cli.save_export_meta(dir_b, {"conv_filter": "bob"})
+
+    assert cli.find_update_target(tmp_path, "bob") == dir_b
+    assert cli.find_update_target(tmp_path, "alice") == dir_a
+
+
+def test_find_update_target_no_match(tmp_path: Path) -> None:
+    """Multiple dirs with no matching filter returns None."""
+    dir_a = tmp_path / "export-a"
+    dir_b = tmp_path / "export-b"
+    dir_a.mkdir()
+    dir_b.mkdir()
+
+    cli.save_export_meta(dir_a, {"conv_filter": "alice"})
+    cli.save_export_meta(dir_b, {"conv_filter": "bob"})
+
+    assert cli.find_update_target(tmp_path, "charlie") is None
+
+
+def test_resolve_update_target_auto_detects(tmp_path: Path) -> None:
+    """Auto-detects when there is exactly one export dir."""
+    export = tmp_path / "only-export"
+    export.mkdir()
+
+    class Args:
+        export_path = None
+        conversation_filter = None
+
+    result = cli.resolve_update_target(tmp_path, Args(), interactive=False)
+    assert result == export
 
 
 def test_merge_text_files_no_trailing_newline(tmp_path: Path) -> None:

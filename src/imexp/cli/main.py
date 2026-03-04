@@ -398,9 +398,9 @@ def add_export_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("-r", "--version", action="store_true", help="Show exporter version")
     parser.add_argument(
         "-w",
-        "--update",
+        "--snapshot",
         action="store_true",
-        help="Update an existing export instead of creating a new one",
+        help="Create a new timestamped export instead of updating an existing one",
     )
     parser.add_argument("-n", "--non-interactive", action="store_true")
     parser.add_argument("-v", "--verbose", action="store_true")
@@ -462,7 +462,7 @@ def build_export_fallback_parser() -> argparse.ArgumentParser:
     """Build a parser for implicit export defaults."""
     parser = argparse.ArgumentParser(add_help=False)
     add_export_args(parser)
-    parser.set_defaults(command="export", update=False)
+    parser.set_defaults(command="export", snapshot=False)
     return parser
 
 
@@ -740,20 +740,57 @@ def merge_export_dirs(staging_dir: Path, target_dir: Path) -> None:
     logger.info("Merged %d new attachment(s) into %s", copied, target_dir)
 
 
+def find_update_target(export_base: Path, conv_filter: str) -> Path | None:
+    """Auto-detect the existing export directory to update.
+
+    Returns the matching directory or None if no suitable target is found.
+    """
+    candidates = list_recent_exports(export_base, limit=50)
+    if not candidates:
+        return None
+
+    if len(candidates) == 1:
+        return candidates[0]
+
+    for path in candidates:
+        meta = load_export_meta(path)
+        if meta.get("conv_filter", "") == conv_filter:
+            return path
+
+    return None
+
+
 def resolve_update_target(
     export_base: Path, args: argparse.Namespace, interactive: bool
-) -> Path:
-    """Resolve the target export directory for an update run."""
+) -> Path | None:
+    """Resolve the target export directory for an update run.
+
+    Returns the target directory, or None if no existing export is found
+    (caller should bootstrap a new one).
+    """
     if args.export_path:
         chosen = Path(args.export_path).expanduser()
         if not chosen.exists():
             raise FileNotFoundError(f"Update target not found: {chosen}")
         return chosen
 
-    if not interactive:
-        raise ValueError("Update mode requires --export-path in non-interactive mode.")
+    conv_filter = getattr(args, "conversation_filter", None) or ""
+    target = find_update_target(export_base, conv_filter)
+    if target:
+        return target
 
-    return select_export_path(export_base)
+    if interactive:
+        recent = list_recent_exports(export_base, limit=3)
+        if recent:
+            eprint("No auto-detected target. Select one or press enter for new export:")
+            for idx, path in enumerate(recent, start=1):
+                eprint(f"  {idx}) {path}")
+            selection = prompt("Select export or enter for new", default="")
+            if selection.isdigit():
+                idx = max(1, min(len(recent), int(selection)))
+                return recent[idx - 1]
+
+    return None
 
 
 def run_update_export(
@@ -915,7 +952,7 @@ def resolve_update_dates(
     return DateRange(start=start_dt, end=end_dt)
 
 
-def run_update(
+def run_continuous(
     args: argparse.Namespace,
     export_base: Path,
     contacts_path: Path,
@@ -923,8 +960,12 @@ def run_update(
     history: dict,
     interactive: bool,
 ) -> None:
-    """Orchestrate an update export into an existing directory."""
+    """Orchestrate a continuous export: update existing or bootstrap new."""
     target_dir = resolve_update_target(export_base, args, interactive)
+    if not target_dir:
+        run_snapshot(args, export_base, contacts_path, history_path, history, interactive)
+        return
+
     platform, db_path = resolve_platform_and_db(args.platform, args.db_path, interactive)
     dates = resolve_update_dates(args, target_dir, history)
 
@@ -955,41 +996,15 @@ def run_update(
     save_history(history_path, history)
 
 
-def main() -> None:
-    """Run the CLI entrypoint."""
-    parser = build_root_parser()
-    args = parser.parse_args()
-    command = args.command or "export"
-    if args.command is None and len(sys.argv) > 1:
-        args = parser.parse_args(["export", *sys.argv[1:]])
-        command = "export"
-    if args.command is None and len(sys.argv) == 1:
-        args = build_export_fallback_parser().parse_args([])
-        command = "export"
-
-    configure_logging(args.verbose)
-
-    export_base = config.base_output_dir()
-    ensure_export_dir(export_base)
-
-    contacts_path = resolve_contacts_path(export_base, args)
-    interactive = not args.non_interactive and command == "export" and len(sys.argv) == 1
-    relabel_interactive = not args.non_interactive and command == "relabel"
-
-    if command == "relabel":
-        run_relabel(export_base, contacts_path, args, relabel_interactive)
-        return
-
-    if not shutil.which("imessage-exporter"):
-        raise FileNotFoundError("imessage-exporter not found in PATH.")
-
-    history_path = resolve_history_path(export_base, args)
-    history = load_history(history_path)
-
-    if getattr(args, "update", False):
-        run_update(args, export_base, contacts_path, history_path, history, interactive)
-        return
-
+def run_snapshot(
+    args: argparse.Namespace,
+    export_base: Path,
+    contacts_path: Path,
+    history_path: Path,
+    history: dict,
+    interactive: bool,
+) -> None:
+    """Run a snapshot export into a new timestamped directory."""
     if interactive:
         config_run = collect_inputs_interactive(
             export_base=export_base,
@@ -1034,6 +1049,44 @@ def main() -> None:
     save_history(config_run.paths.history_json, history)
 
     eprint(f"Export complete: {config_run.paths.export_path}")
+
+
+def main() -> None:
+    """Run the CLI entrypoint."""
+    parser = build_root_parser()
+    args = parser.parse_args()
+    command = args.command or "export"
+    if args.command is None and len(sys.argv) > 1:
+        args = parser.parse_args(["export", *sys.argv[1:]])
+        command = "export"
+    if args.command is None and len(sys.argv) == 1:
+        args = build_export_fallback_parser().parse_args([])
+        command = "export"
+
+    configure_logging(args.verbose)
+
+    export_base = config.base_output_dir()
+    ensure_export_dir(export_base)
+
+    contacts_path = resolve_contacts_path(export_base, args)
+    interactive = not args.non_interactive and command == "export" and len(sys.argv) == 1
+    relabel_interactive = not args.non_interactive and command == "relabel"
+
+    if command == "relabel":
+        run_relabel(export_base, contacts_path, args, relabel_interactive)
+        return
+
+    if not shutil.which("imessage-exporter"):
+        raise FileNotFoundError("imessage-exporter not found in PATH.")
+
+    history_path = resolve_history_path(export_base, args)
+    history = load_history(history_path)
+
+    if getattr(args, "snapshot", False):
+        run_snapshot(args, export_base, contacts_path, history_path, history, interactive)
+        return
+
+    run_continuous(args, export_base, contacts_path, history_path, history, interactive)
 
 
 if __name__ == "__main__":
