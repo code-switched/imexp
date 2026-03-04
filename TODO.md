@@ -12,4 +12,5 @@
 
 ## Improvements
 
-- [ ] Fix shortcut aliases
+- [ ] Fix shortcut aliases:
+    - "for this tool (imexp): -u should be -uid, -k should be -cf, -w should be -sn, -s to -sd and -e to -ed, -j to -cj and -y to -hj. -r to -V for version and -g to -di, -n to -ni."
