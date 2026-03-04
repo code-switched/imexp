@@ -952,6 +952,21 @@ def resolve_update_dates(
     return DateRange(start=start_dt, end=end_dt)
 
 
+def default_export_dir(export_base: Path, conv_filter: str) -> Path:
+    """Derive the default export directory name from the conversation filter."""
+    if conv_filter:
+        return export_base / sanitize_label(conv_filter)
+    return export_base / dt.datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
+
+
+def bootstrap_export_dir(export_base: Path, args: argparse.Namespace) -> Path:
+    """Create the initial export directory for a new continuous export."""
+    conv_filter = getattr(args, "conversation_filter", None) or ""
+    export_dir = default_export_dir(export_base, conv_filter)
+    export_dir.mkdir(parents=True, exist_ok=True)
+    return export_dir
+
+
 def run_continuous(
     args: argparse.Namespace,
     export_base: Path,
@@ -963,11 +978,20 @@ def run_continuous(
     """Orchestrate a continuous export: update existing or bootstrap new."""
     target_dir = resolve_update_target(export_base, args, interactive)
     if not target_dir:
-        run_snapshot(args, export_base, contacts_path, history_path, history, interactive)
-        return
+        target_dir = bootstrap_export_dir(export_base, args)
+        eprint(f"No existing export found. Creating: {target_dir}")
 
     platform, db_path = resolve_platform_and_db(args.platform, args.db_path, interactive)
-    dates = resolve_update_dates(args, target_dir, history)
+
+    meta = load_export_meta(target_dir)
+    has_prior = bool(meta.get("last_end"))
+
+    if has_prior:
+        dates = resolve_update_dates(args, target_dir, history)
+    else:
+        start_dt = parse_date(getattr(args, "start_date", None) or "") or dt.datetime.now()
+        end_dt = parse_date(getattr(args, "end_date", None) or "") or dt.datetime.now()
+        dates = DateRange(start=start_dt, end=end_dt)
 
     options = ExportOptions(
         platform=platform,

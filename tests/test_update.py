@@ -297,6 +297,30 @@ def test_resolve_update_target_auto_detects(tmp_path: Path) -> None:
     assert result == export
 
 
+def test_default_export_dir_from_filter(tmp_path: Path) -> None:
+    """Folder name is derived from conversation filter."""
+    result = cli.default_export_dir(tmp_path, "alice,bob")
+    assert result == tmp_path / "alice-bob"
+
+
+def test_default_export_dir_no_filter(tmp_path: Path) -> None:
+    """Falls back to timestamp when no filter provided."""
+    result = cli.default_export_dir(tmp_path, "")
+    assert result.parent == tmp_path
+    assert result.name != ""
+
+
+def test_bootstrap_export_dir_creates_folder(tmp_path: Path) -> None:
+    """Bootstrap creates the directory derived from conv filter."""
+
+    class Args:
+        conversation_filter = "lee,phlo"
+
+    result = cli.bootstrap_export_dir(tmp_path, Args())
+    assert result == tmp_path / "lee-phlo"
+    assert result.exists()
+
+
 def test_merge_text_files_no_trailing_newline(tmp_path: Path) -> None:
     """Appending to a file without trailing newline adds one."""
     staging = tmp_path / "staging"

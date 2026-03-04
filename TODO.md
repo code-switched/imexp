@@ -9,3 +9,7 @@
 ## Package
 
 - [ ] Figure out how to bundle the binary of `imessage-exporter` into the package, may include detecting platform, environment, etc
+
+## Improvements
+
+- [ ] Fix shortcut aliases
