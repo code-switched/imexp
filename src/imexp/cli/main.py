@@ -16,6 +16,7 @@ from dataclasses import dataclass
 import dateparser
 
 from imexp.cli import config
+from imexp.cli.config import CLIConfig, ExportDefaults
 from imexp.core.utils.helpformatter import ColourHelpFormatter
 
 
@@ -375,22 +376,97 @@ def postprocess_exports(context: PostprocessContext, ask_for_missing: bool = Tru
             file_path.rename(file_path.with_name(new_name))
 
 
-def add_export_args(parser: argparse.ArgumentParser) -> None:
+@dataclass(frozen=True)
+class HelpDefaults:
+    """Resolved defaults for help text rendering."""
+
+    platform: str
+    format: str
+    copy_method: str
+    conversation_filter: str
+    use_caller_id: str
+    output_dir: str
+
+
+def resolve_help_defaults(cli_config: CLIConfig | None = None) -> HelpDefaults:
+    """Resolve config-aware defaults for help output."""
+    if not cli_config:
+        return _fallback_help_defaults()
+
+    exp = cli_config.export
+    return HelpDefaults(
+        platform=exp.platform or "prompt",
+        format=exp.format,
+        copy_method=exp.copy_method,
+        conversation_filter=exp.conversation_filter or "none",
+        use_caller_id="enabled" if exp.use_caller_id else "disabled",
+        output_dir=exp.output_dir,
+    )
+
+
+def _fallback_help_defaults() -> HelpDefaults:
+    """Return hardcoded defaults when config is unavailable."""
+    return HelpDefaults(
+        platform="prompt",
+        format="txt",
+        copy_method="full",
+        conversation_filter="none",
+        use_caller_id="enabled",
+        output_dir="./data/messages/sms",
+    )
+
+
+def _with_default(help_text: str, default_value: str) -> str:
+    """Append a default value to help text."""
+    return f"{help_text} (default: {default_value})"
+
+
+def add_export_args(
+    parser: argparse.ArgumentParser,
+    help_defaults: HelpDefaults | None = None,
+) -> None:
     """Add export arguments to a parser."""
-    parser.add_argument("-p", "--platform", choices=["macOS", "iOS"], help="Source platform")
+    defaults = help_defaults or _fallback_help_defaults()
+
+    parser.add_argument(
+        "-p",
+        "--platform",
+        choices=["macOS", "iOS"],
+        help=_with_default("Source platform", defaults.platform),
+    )
     parser.add_argument("-d", "--db-path", help="Path to macOS chat.db or iOS backup root")
-    parser.add_argument("-f", "--format", default="txt", choices=["txt", "html"])
+    parser.add_argument(
+        "-f",
+        "--format",
+        default="txt",
+        choices=["txt", "html"],
+        help=_with_default("Output format", defaults.format),
+    )
     parser.add_argument(
         "-c",
         "--copy-method",
         default="full",
         choices=["disabled", "clone", "basic", "full"],
+        help=_with_default("Attachment copy method", defaults.copy_method),
     )
     parser.add_argument("-s", "--start-date", help="Start date (natural language)")
     parser.add_argument("-e", "--end-date", help="End date (natural language, before this date)")
-    parser.add_argument("-u", "--use-caller-id", action="store_true")
-    parser.add_argument("-k", "--conversation-filter", help="Comma-separated filter string")
-    parser.add_argument("-o", "--export-path", help="Output directory")
+    parser.add_argument(
+        "-u",
+        "--use-caller-id",
+        action="store_true",
+        help=_with_default("Use caller ID instead of Me", defaults.use_caller_id),
+    )
+    parser.add_argument(
+        "-k",
+        "--conversation-filter",
+        help=_with_default("Comma-separated filter string", defaults.conversation_filter),
+    )
+    parser.add_argument(
+        "-o",
+        "--export-path",
+        help=_with_default("Output directory", defaults.output_dir),
+    )
     parser.add_argument("-j", "--contacts-json", help="Path to contacts overrides JSON")
     parser.add_argument("-y", "--history-json", help="Path to history JSON")
     parser.add_argument("-g", "--diagnostics", action="store_true")
@@ -406,14 +482,17 @@ def add_export_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("-v", "--verbose", action="store_true")
 
 
-def build_export_parser(subparsers: argparse._SubParsersAction) -> argparse.ArgumentParser:
+def build_export_parser(
+    subparsers: argparse._SubParsersAction,
+    help_defaults: HelpDefaults | None = None,
+) -> argparse.ArgumentParser:
     """Register the export subcommand parser."""
     parser = subparsers.add_parser(
         "export",
         help="Export messages via imessage-exporter",
         formatter_class=ColourHelpFormatter,
     )
-    add_export_args(parser)
+    add_export_args(parser, help_defaults=help_defaults)
     parser.set_defaults(command="export")
     return parser
 
@@ -446,22 +525,24 @@ def build_relabel_parser(subparsers: argparse._SubParsersAction) -> argparse.Arg
     return parser
 
 
-def build_root_parser() -> argparse.ArgumentParser:
+def build_root_parser(help_defaults: HelpDefaults | None = None) -> argparse.ArgumentParser:
     """Build the root CLI parser with subcommands."""
     parser = argparse.ArgumentParser(
         description="imexp CLI",
         formatter_class=ColourHelpFormatter,
     )
     subparsers = parser.add_subparsers(dest="command")
-    build_export_parser(subparsers)
+    build_export_parser(subparsers, help_defaults=help_defaults)
     build_relabel_parser(subparsers)
     return parser
 
 
-def build_export_fallback_parser() -> argparse.ArgumentParser:
+def build_export_fallback_parser(
+    help_defaults: HelpDefaults | None = None,
+) -> argparse.ArgumentParser:
     """Build a parser for implicit export defaults."""
     parser = argparse.ArgumentParser(add_help=False)
-    add_export_args(parser)
+    add_export_args(parser, help_defaults=help_defaults)
     parser.set_defaults(command="export", snapshot=False)
     return parser
 
@@ -1075,21 +1156,45 @@ def run_snapshot(
     eprint(f"Export complete: {config_run.paths.export_path}")
 
 
+def apply_config_defaults(args: argparse.Namespace, cli_config: CLIConfig) -> None:
+    """Apply config.ini defaults to args that weren't set on the command line."""
+    exp = cli_config.export
+
+    if not getattr(args, "platform", None) and exp.platform:
+        args.platform = exp.platform
+
+    if not getattr(args, "conversation_filter", None) and exp.conversation_filter:
+        args.conversation_filter = exp.conversation_filter
+
+    if not getattr(args, "use_caller_id", False) and exp.use_caller_id:
+        args.use_caller_id = True
+
+    if getattr(args, "format", "txt") == "txt" and exp.format:
+        args.format = exp.format
+
+    if getattr(args, "copy_method", "full") == "full" and exp.copy_method:
+        args.copy_method = exp.copy_method
+
+
 def main() -> None:
     """Run the CLI entrypoint."""
-    parser = build_root_parser()
+    cli_config = config.load_config()
+    help_defaults = resolve_help_defaults(cli_config)
+
+    parser = build_root_parser(help_defaults=help_defaults)
     args = parser.parse_args()
     command = args.command or "export"
     if args.command is None and len(sys.argv) > 1:
         args = parser.parse_args(["export", *sys.argv[1:]])
         command = "export"
     if args.command is None and len(sys.argv) == 1:
-        args = build_export_fallback_parser().parse_args([])
+        args = build_export_fallback_parser(help_defaults=help_defaults).parse_args([])
         command = "export"
 
     configure_logging(args.verbose)
+    apply_config_defaults(args, cli_config)
 
-    export_base = config.base_output_dir()
+    export_base = config.base_output_dir(cli_config)
     ensure_export_dir(export_base)
 
     contacts_path = resolve_contacts_path(export_base, args)
