@@ -4,6 +4,7 @@
 /data/logs
 /data/base
 /data/config/
+.staging/
 
 # Custom Extensions
 *.log.*

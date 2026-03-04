@@ -22,6 +22,8 @@ from imexp.core.utils.helpformatter import ColourHelpFormatter
 IOS_CONTACTS_REL = Path("31/31bb7ba8914766d4ba40d6dfb6113c8b614be442")
 CONTACTS_FILE = "contacts.json"
 HISTORY_FILE = "history.json"
+EXPORT_META_FILE = "export_meta.json"
+STAGING_DIR = ".staging"
 
 
 @dataclass(frozen=True)
@@ -394,6 +396,12 @@ def add_export_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("-g", "--diagnostics", action="store_true")
     parser.add_argument("-l", "--no-lazy", action="store_true")
     parser.add_argument("-r", "--version", action="store_true", help="Show exporter version")
+    parser.add_argument(
+        "-w",
+        "--update",
+        action="store_true",
+        help="Update an existing export instead of creating a new one",
+    )
     parser.add_argument("-n", "--non-interactive", action="store_true")
     parser.add_argument("-v", "--verbose", action="store_true")
 
@@ -454,7 +462,7 @@ def build_export_fallback_parser() -> argparse.ArgumentParser:
     """Build a parser for implicit export defaults."""
     parser = argparse.ArgumentParser(add_help=False)
     add_export_args(parser)
-    parser.set_defaults(command="export")
+    parser.set_defaults(command="export", update=False)
     return parser
 
 
@@ -655,11 +663,158 @@ def update_history_end(history: dict, end_dt: dt.datetime | None) -> None:
     history["last_end"] = end_dt.isoformat(sep=" ") if isinstance(end_dt, dt.datetime) else ""
 
 
+def load_export_meta(export_dir: Path) -> dict:
+    """Load per-export metadata from an export directory."""
+    meta_path = export_dir / EXPORT_META_FILE
+    if not meta_path.exists():
+        return {}
+    contents = meta_path.read_text()
+    if not contents.strip():
+        return {}
+    return json.loads(contents)
+
+
+def save_export_meta(export_dir: Path, meta: dict) -> None:
+    """Persist per-export metadata to an export directory."""
+    meta_path = export_dir / EXPORT_META_FILE
+    meta_path.write_text(json.dumps(meta, indent=2, sort_keys=True))
+
+
+def build_export_meta(config_run: RunConfig) -> dict:
+    """Build metadata for the current export run."""
+    return {
+        "conv_filter": config_run.options.conv_filter,
+        "platform": config_run.options.platform or "",
+        "last_end": (
+            config_run.dates.end.isoformat(sep=" ")
+            if isinstance(config_run.dates.end, dt.datetime)
+            else ""
+        ),
+        "updated_at": dt.datetime.now().isoformat(sep=" "),
+    }
+
+
+def merge_text_files(staging_dir: Path, target_dir: Path) -> None:
+    """Append new text content from staging into target."""
+    for staged_file in staging_dir.glob("*.txt"):
+        target_file = target_dir / staged_file.name
+        staged_text = staged_file.read_text(errors="ignore")
+        if not staged_text.strip():
+            continue
+        if not target_file.exists():
+            target_file.write_text(staged_text)
+            continue
+        existing_text = target_file.read_text(errors="ignore")
+        with target_file.open("a") as f:
+            if existing_text and not existing_text.endswith("\n"):
+                f.write("\n")
+            f.write(staged_text)
+
+
+def merge_attachments(staging_dir: Path, target_dir: Path) -> int:
+    """Copy new attachment files from staging into target."""
+    staged_attachments = staging_dir / "attachments"
+    if not staged_attachments.exists():
+        return 0
+    target_attachments = target_dir / "attachments"
+    target_attachments.mkdir(parents=True, exist_ok=True)
+    copied = 0
+    for src in staged_attachments.rglob("*"):
+        if not src.is_file():
+            continue
+        rel = src.relative_to(staged_attachments)
+        dest = target_attachments / rel
+        if dest.exists():
+            continue
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src, dest)
+        copied += 1
+    return copied
+
+
+def merge_export_dirs(staging_dir: Path, target_dir: Path) -> None:
+    """Merge a staged export into an existing target export."""
+    logger = get_logger()
+    merge_text_files(staging_dir, target_dir)
+    copied = merge_attachments(staging_dir, target_dir)
+    logger.info("Merged %d new attachment(s) into %s", copied, target_dir)
+
+
+def resolve_update_target(
+    export_base: Path, args: argparse.Namespace, interactive: bool
+) -> Path:
+    """Resolve the target export directory for an update run."""
+    if args.export_path:
+        chosen = Path(args.export_path).expanduser()
+        if not chosen.exists():
+            raise FileNotFoundError(f"Update target not found: {chosen}")
+        return chosen
+
+    if not interactive:
+        raise ValueError("Update mode requires --export-path in non-interactive mode.")
+
+    return select_export_path(export_base)
+
+
+def run_update_export(
+    config_run: RunConfig,
+    target_dir: Path,
+    export_base: Path,
+    contacts_path: Path,
+) -> None:
+    """Run an incremental export and merge into an existing directory."""
+    logger = get_logger()
+    staging_dir = export_base / STAGING_DIR / dt.datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
+    staging_dir.mkdir(parents=True, exist_ok=True)
+
+    staging_config = RunConfig(
+        options=config_run.options,
+        dates=config_run.dates,
+        paths=PathsConfig(
+            export_path=staging_dir,
+            contacts_json=config_run.paths.contacts_json,
+            history_json=config_run.paths.history_json,
+        ),
+    )
+
+    warn_on_date_range(staging_config)
+    run_exporter(staging_config)
+
+    contacts_json = load_contacts_json(contacts_path)
+    overrides = contacts_json.get("overrides", {})
+    contacts_map = load_contacts_for_platform(
+        config_run.options.platform, config_run.options.db_path
+    )
+    postprocess_exports(
+        PostprocessContext(
+            export_dir=staging_dir,
+            contacts_map=contacts_map,
+            overrides=overrides,
+        ),
+        ask_for_missing=False,
+    )
+    contacts_json["overrides"] = overrides
+    save_contacts_json(contacts_path, contacts_json)
+
+    merge_export_dirs(staging_dir, target_dir)
+
+    meta = load_export_meta(target_dir)
+    meta.update(build_export_meta(config_run))
+    save_export_meta(target_dir, meta)
+
+    shutil.rmtree(staging_dir)
+    logger.info("Update complete: %s", target_dir)
+
+
 def list_recent_exports(export_base: Path, limit: int = 3) -> list[Path]:
     """Return the most recent export directories."""
     if not export_base.exists():
         return []
-    candidates = [path for path in export_base.iterdir() if path.is_dir()]
+    candidates = [
+        path
+        for path in export_base.iterdir()
+        if path.is_dir() and path.name != STAGING_DIR
+    ]
     candidates.sort(key=lambda path: path.stat().st_mtime, reverse=True)
     return candidates[:limit]
 
@@ -728,6 +883,78 @@ def run_relabel(
     eprint(f"Relabel complete: {export_path}")
 
 
+def resolve_update_dates(
+    args: argparse.Namespace, target_dir: Path, history: dict
+) -> DateRange:
+    """Resolve the date range for an update run.
+
+    Prefers export_meta.json in the target dir, falls back to history.json,
+    then to the CLI --start-date flag.
+    """
+    meta = load_export_meta(target_dir)
+    meta_end = meta.get("last_end", "")
+    history_end = history.get("last_end", "")
+
+    start_text = getattr(args, "start_date", None) or ""
+    if not start_text and meta_end:
+        start_text = meta_end
+    if not start_text and history_end:
+        start_text = history_end
+    if not start_text:
+        raise ValueError(
+            "Cannot determine start date for update. "
+            "Provide --start-date or ensure the target has export_meta.json."
+        )
+
+    start_dt = parse_date(start_text)
+    if not start_dt:
+        raise ValueError(f"Could not parse start date: {start_text}")
+
+    end_text = getattr(args, "end_date", None) or ""
+    end_dt = parse_date(end_text) or dt.datetime.now()
+    return DateRange(start=start_dt, end=end_dt)
+
+
+def run_update(
+    args: argparse.Namespace,
+    export_base: Path,
+    contacts_path: Path,
+    history_path: Path,
+    history: dict,
+    interactive: bool,
+) -> None:
+    """Orchestrate an update export into an existing directory."""
+    target_dir = resolve_update_target(export_base, args, interactive)
+    platform, db_path = resolve_platform_and_db(args.platform, args.db_path, interactive)
+    dates = resolve_update_dates(args, target_dir, history)
+
+    options = ExportOptions(
+        platform=platform,
+        db_path=db_path,
+        conv_filter=args.conversation_filter or "",
+        use_caller_id=args.use_caller_id,
+        copy_method=args.copy_method,
+        output_format=args.format,
+        diagnostics=args.diagnostics,
+        no_lazy=args.no_lazy,
+        version=args.version,
+    )
+    config_run = RunConfig(
+        options=options,
+        dates=dates,
+        paths=PathsConfig(
+            export_path=target_dir,
+            contacts_json=contacts_path,
+            history_json=history_path,
+        ),
+    )
+
+    run_update_export(config_run, target_dir, export_base, contacts_path)
+
+    update_history_end(history, dates.end)
+    save_history(history_path, history)
+
+
 def main() -> None:
     """Run the CLI entrypoint."""
     parser = build_root_parser()
@@ -758,6 +985,10 @@ def main() -> None:
 
     history_path = resolve_history_path(export_base, args)
     history = load_history(history_path)
+
+    if getattr(args, "update", False):
+        run_update(args, export_base, contacts_path, history_path, history, interactive)
+        return
 
     if interactive:
         config_run = collect_inputs_interactive(
@@ -795,6 +1026,9 @@ def main() -> None:
 
     contacts_json["overrides"] = overrides
     save_contacts_json(config_run.paths.contacts_json, contacts_json)
+
+    meta = build_export_meta(config_run)
+    save_export_meta(config_run.paths.export_path, meta)
 
     update_history_end(history, config_run.dates.end)
     save_history(config_run.paths.history_json, history)
