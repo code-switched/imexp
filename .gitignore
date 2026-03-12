@@ -5,6 +5,7 @@
 /data/base
 /data/config/
 .staging/
+/src/imexp/bin/
 
 # Custom Extensions
 *.log.*

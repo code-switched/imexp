@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=80.9.0", "wheel"]
+requires = ["packaging>=24.0", "setuptools>=80.9.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -11,9 +11,25 @@ readme = "README.md"
 license = "GPL-3.0-or-later"
 requires-python = ">=3.12"
 keywords = ["imessage", "sms", "export", "backup", "messages", "macos", "ios"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: End Users/Desktop",
+    "Operating System :: MacOS",
+    "Operating System :: Microsoft :: Windows",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Communications :: Chat",
+    "Topic :: Utilities",
+]
 dependencies = [
     "dateparser==1.2.2",
 ]
+
+[project.urls]
+Homepage = "https://github.com/code-switched/imexp"
+Repository = "https://github.com/code-switched/imexp"
+Issues = "https://github.com/code-switched/imexp/issues"
 
 [project.optional-dependencies]
 dev = [
@@ -24,6 +40,12 @@ dev = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+imexp = ["bin/*"]
 
 [project.scripts]
 imexp = "imexp.cli.main:main"
