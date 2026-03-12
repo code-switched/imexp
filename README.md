@@ -13,17 +13,31 @@ An interactive CLI wrapper for [imessage-exporter](https://github.com/ReagentX/i
 
 ## Requirements
 
-- macOS (required for Contacts database access)
 - Python 3.12+
-- [imessage-exporter](https://github.com/ReagentX/imessage-exporter) installed and in your PATH
+- macOS or Windows for the official wheels
+
+macOS local Address Book lookups require macOS. iOS backup exports work on both macOS and Windows.
 
 ## Installation
+
+Install from PyPI:
 
 ```bash
 pip install imexp
 ```
 
-Or install from source:
+Official wheels bundle the matching `imessage-exporter` binary for:
+
+- macOS Apple Silicon
+- macOS Intel
+- Windows x86_64
+
+Source installs do not bundle the exporter binary. For editable or source installs, either:
+
+- install `imessage-exporter` separately and keep it on `PATH`
+- point `IMEXP_EXPORTER_PATH` at a local binary
+
+Example source install:
 
 ```bash
 git clone https://github.com/code-switched/imexp.git
@@ -92,4 +106,6 @@ By default, files are stored in `./data/messages/sms/`:
 
 ## License
 
-MIT
+`imexp` is distributed under `GPL-3.0-or-later`.
+
+The official wheels bundle the upstream `imessage-exporter` binary, which is also licensed under `GPL-3.0`.
