@@ -16,6 +16,16 @@ if Windows:
 - `.\.venv\Scripts\pylint`
 - `.\.venv\Scripts\pytest`
 
+Run pytest before and after each turn so you know if your work broke any logic.
+
+Once we come to an agreement on what code should be committed craft a commit mesage for the new code based on ./docs/dev/commits.md and commit the code, make sure the body is a hyphenated bullet list. Do not push unless asked.
+
+## Brainstorming
+
+Ask me clarifying questions until you know what I want to build and walk me through the setup step by step.
+
+## Syntax
+
 Follow these rules when generating or modifying code in this repository:
 
 - Use guard clauses to exit early. Keep the happy path straight and flat.
@@ -28,7 +38,9 @@ Follow these rules when generating or modifying code in this repository:
 - If you catch broadly for logging, re-raise so errors aren’t swallowed.
 - Keep functions focused on one responsibility with clear inputs/outputs.
 - Fail fast when invariants are violated; use precise error messages.
-- Prioritize clarity over cleverness—code should read top-to-bottom like a story.
+- Prioritize clarity over cleverness, code should read top-to-bottom like a story.
+- For CLI tools, use `Declarative` control flow style. Do NOT use exit-code style control flow. Let the entrypoint handle process termination.
+- We are in the pre-alpha building stage, there is no need for fallbacks or backwards compatability. Cutover. This is unreleased, all code needs to be canonical.
 
 (See below for full guidelines and examples.)
 
