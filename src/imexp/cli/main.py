@@ -16,7 +16,8 @@ from dataclasses import dataclass
 import dateparser
 
 from imexp.cli import config
-from imexp.cli.config import CLIConfig, ExportDefaults
+from imexp.cli.config import CLIConfig
+from imexp.core.exporter_binary import resolve_exporter_binary
 from imexp.core.utils.helpformatter import ColourHelpFormatter
 
 
@@ -672,10 +673,13 @@ def collect_inputs_cli(
     return RunConfig(options=options, dates=dates, paths=paths)
 
 
-def build_export_command(config_run: RunConfig) -> list[str]:
+def build_export_command(
+    config_run: RunConfig,
+    exporter_binary: str | Path = "imessage-exporter",
+) -> list[str]:
     """Build the imessage-exporter command."""
     cmd = [
-        "imessage-exporter",
+        str(exporter_binary),
         "--format",
         config_run.options.output_format,
         "--copy-method",
@@ -710,7 +714,7 @@ def build_export_command(config_run: RunConfig) -> list[str]:
 
 def run_exporter(config_run: RunConfig) -> None:
     """Run imessage-exporter with the resolved config."""
-    cmd = build_export_command(config_run)
+    cmd = build_export_command(config_run, exporter_binary=resolve_exporter_binary())
     run(cmd)
 
 
@@ -1205,8 +1209,7 @@ def main() -> None:
         run_relabel(export_base, contacts_path, args, relabel_interactive)
         return
 
-    if not shutil.which("imessage-exporter"):
-        raise FileNotFoundError("imessage-exporter not found in PATH.")
+    resolve_exporter_binary()
 
     history_path = resolve_history_path(export_base, args)
     history = load_history(history_path)
