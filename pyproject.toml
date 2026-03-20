@@ -1,6 +1,6 @@
 [build-system]
-requires = ["packaging>=24.0", "setuptools>=80.9.0"]
-build-backend = "setuptools.build_meta"
+requires = ["hatchling>=1.29.0", "packaging>=24.0"]
+build-backend = "hatchling.build"
 
 [project]
 name = "imexp"
@@ -41,11 +41,15 @@ dev = [
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 
-[tool.setuptools.packages.find]
-where = ["src"]
+[tool.hatch.build.targets.sdist]
+exclude = ["src/imexp/bin", "src/imexp/bin/**"]
 
-[tool.setuptools.package-data]
-imexp = ["bin/*"]
+[tool.hatch.build.targets.wheel]
+packages = ["src/imexp"]
+only-packages = true
+
+[tool.hatch.build.targets.wheel.hooks.custom]
+path = "packaging/hatch_build.py"
 
 [project.scripts]
 imexp = "imexp.cli.main:main"
