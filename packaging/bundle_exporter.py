@@ -14,7 +14,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-MANIFEST_PATH = ROOT / "packaging" / "imessage-exporter-assets.json"
+MANIFEST_PATH = Path(__file__).resolve().with_name("imessage-exporter-assets.json")
 PACKAGE_BIN_DIR = ROOT / "src" / "imexp" / "bin"
 
 

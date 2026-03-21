@@ -18,7 +18,7 @@ jobs:
         with:
           python-version: "3.12"
       - run: python -m pip install --upgrade pip build
-      - run: python scripts/clean_build_artifacts.py
+      - run: python packaging/clean_build_artifacts.py
       - run: python -m build --sdist
       - uses: actions/upload-artifact@v4
         with:
@@ -43,8 +43,8 @@ jobs:
         with:
           python-version: "3.12"
       - run: python -m pip install --upgrade pip build
-      - run: python scripts/clean_build_artifacts.py
-      - run: python scripts/bundle_exporter.py --target "${{ matrix.target }}"
+      - run: python packaging/clean_build_artifacts.py
+      - run: python packaging/bundle_exporter.py --target "${{ matrix.target }}"
       - run: python -m build --wheel
       - uses: actions/upload-artifact@v4
         with:
