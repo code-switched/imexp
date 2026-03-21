@@ -54,6 +54,7 @@ def test_build_export_meta() -> None:
     )
     meta = cli.build_export_meta(config_run)
     assert meta["conv_filter"] == "alice"
+    assert meta["profile"] == ""
     assert meta["platform"] == "macOS"
     assert meta["last_end"] == "2024-06-01 12:00:00"
     assert "updated_at" in meta
@@ -271,6 +272,19 @@ def test_find_update_target_matches_by_filter(tmp_path: Path) -> None:
     assert cli.find_update_target(tmp_path, "alice") == dir_a
 
 
+def test_find_update_target_prefers_profile_match(tmp_path: Path) -> None:
+    """Profiles take precedence over raw filter matching."""
+    dir_a = tmp_path / "export-a"
+    dir_b = tmp_path / "export-b"
+    dir_a.mkdir()
+    dir_b.mkdir()
+
+    cli.save_export_meta(dir_a, {"conv_filter": "alice", "profile": "client-a"})
+    cli.save_export_meta(dir_b, {"conv_filter": "alice", "profile": "client-b"})
+
+    assert cli.find_update_target(tmp_path, "alice", profile_name="client-b") == dir_b
+
+
 def test_find_update_target_no_match(tmp_path: Path) -> None:
     """Multiple dirs with no matching filter returns None."""
     dir_a = tmp_path / "export-a"
@@ -303,6 +317,12 @@ def test_default_export_dir_from_filter(tmp_path: Path) -> None:
     assert result == tmp_path / "alice-bob"
 
 
+def test_default_export_dir_from_profile(tmp_path: Path) -> None:
+    """Profile names become the default export folder label."""
+    result = cli.default_export_dir(tmp_path, "", profile_name="client a")
+    assert result == tmp_path / "client-a"
+
+
 def test_default_export_dir_no_filter(tmp_path: Path) -> None:
     """Falls back to timestamp when no filter provided."""
     result = cli.default_export_dir(tmp_path, "")
@@ -312,12 +332,15 @@ def test_default_export_dir_no_filter(tmp_path: Path) -> None:
 
 def test_bootstrap_export_dir_creates_folder(tmp_path: Path) -> None:
     """Bootstrap creates the directory derived from conv filter."""
-
-    class Args:
-        conversation_filter = "lee,phlo"
-
-    result = cli.bootstrap_export_dir(tmp_path, Args())
+    result = cli.bootstrap_export_dir(tmp_path, "lee,phlo")
     assert result == tmp_path / "lee-phlo"
+    assert result.exists()
+
+
+def test_bootstrap_export_dir_uses_profile_name(tmp_path: Path) -> None:
+    """Bootstrap uses the profile name when one is selected."""
+    result = cli.bootstrap_export_dir(tmp_path, "", profile_name="client a")
+    assert result == tmp_path / "client-a"
     assert result.exists()
 
 
@@ -335,3 +358,107 @@ def test_merge_text_files_no_trailing_newline(tmp_path: Path) -> None:
 
     merged = (target / "chat.txt").read_text()
     assert merged == "line 1\nline 2\n"
+
+
+def test_run_update_export_cleans_staging_on_success(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Successful updates remove the run staging directory and empty staging root."""
+    export_base = tmp_path / "exports"
+    target_dir = export_base / "client-a"
+    contacts_path = export_base / "contacts.json"
+    history_path = export_base / "history.json"
+    export_base.mkdir()
+
+    def fake_run_exporter(config_run: cli.RunConfig) -> None:
+        config_run.paths.export_path.mkdir(parents=True, exist_ok=True)
+        (config_run.paths.export_path / "chat.txt").write_text("hello\n")
+
+    monkeypatch.setattr(cli, "run_exporter", fake_run_exporter)
+    monkeypatch.setattr(cli, "load_contacts_for_platform", lambda _platform, _db_path: {})
+    monkeypatch.setattr(
+        cli,
+        "postprocess_exports",
+        lambda _context, ask_for_missing=False: None,
+    )
+
+    config_run = cli.RunConfig(
+        options=cli.ExportOptions(
+            platform="macOS",
+            db_path="",
+            conv_filter="alice",
+            use_caller_id=True,
+            copy_method="full",
+            output_format="txt",
+            diagnostics=False,
+            no_lazy=False,
+            version=False,
+            profile_name="client-a",
+        ),
+        dates=cli.DateRange(start=dt.datetime(2024, 1, 1), end=dt.datetime(2024, 1, 2)),
+        paths=cli.PathsConfig(
+            export_path=target_dir,
+            contacts_json=contacts_path,
+            history_json=history_path,
+        ),
+    )
+
+    cli.run_update_export(config_run, target_dir, export_base, contacts_path)
+
+    assert not (export_base / cli.STAGING_DIR).exists()
+    assert (target_dir / "chat.txt").exists()
+
+
+def test_run_update_export_preserves_failed_staging(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Failed updates leave the populated staging directory on disk."""
+    export_base = tmp_path / "exports"
+    target_dir = export_base / "client-a"
+    contacts_path = export_base / "contacts.json"
+    history_path = export_base / "history.json"
+    export_base.mkdir()
+
+    def fake_run_exporter(config_run: cli.RunConfig) -> None:
+        config_run.paths.export_path.mkdir(parents=True, exist_ok=True)
+        (config_run.paths.export_path / "chat.txt").write_text("hello\n")
+
+    def fail_postprocess(_context: cli.PostprocessContext, ask_for_missing: bool = False) -> None:
+        raise ValueError("boom")
+
+    monkeypatch.setattr(cli, "run_exporter", fake_run_exporter)
+    monkeypatch.setattr(cli, "load_contacts_for_platform", lambda _platform, _db_path: {})
+    monkeypatch.setattr(cli, "postprocess_exports", fail_postprocess)
+
+    config_run = cli.RunConfig(
+        options=cli.ExportOptions(
+            platform="macOS",
+            db_path="",
+            conv_filter="alice",
+            use_caller_id=True,
+            copy_method="full",
+            output_format="txt",
+            diagnostics=False,
+            no_lazy=False,
+            version=False,
+            profile_name="client-a",
+        ),
+        dates=cli.DateRange(start=dt.datetime(2024, 1, 1), end=dt.datetime(2024, 1, 2)),
+        paths=cli.PathsConfig(
+            export_path=target_dir,
+            contacts_json=contacts_path,
+            history_json=history_path,
+        ),
+    )
+
+    with pytest.raises(ValueError, match="boom"):
+        cli.run_update_export(config_run, target_dir, export_base, contacts_path)
+
+    staging_root = export_base / cli.STAGING_DIR
+    staging_children = list(staging_root.iterdir())
+    assert len(staging_children) == 1
+    assert (staging_children[0] / "chat.txt").exists()
+    assert "Preserved staged files at" in capsys.readouterr().err

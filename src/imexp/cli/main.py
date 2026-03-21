@@ -16,12 +16,14 @@ from dataclasses import dataclass
 import dateparser
 
 from imexp.cli import config
-from imexp.cli.config import CLIConfig
+from imexp.cli.config import CLIConfig, ProfileConfig
 from imexp.core.exporter_binary import resolve_exporter_binary
 from imexp.core.utils.helpformatter import ColourHelpFormatter
 
 
 IOS_CONTACTS_REL = Path("31/31bb7ba8914766d4ba40d6dfb6113c8b614be442")
+IOS_MESSAGES_REL = Path("3d/3d0d7e5fb2ce288813306e4d4636395e047a3d28")
+MACOS_MESSAGES_DB = Path("~/Library/Messages/chat.db").expanduser()
 CONTACTS_FILE = "contacts.json"
 HISTORY_FILE = "history.json"
 EXPORT_META_FILE = "export_meta.json"
@@ -49,6 +51,7 @@ class ExportOptions:
     diagnostics: bool
     no_lazy: bool
     version: bool
+    profile_name: str = ""
 
 
 @dataclass(frozen=True)
@@ -76,6 +79,14 @@ class PostprocessContext:
     export_dir: Path
     contacts_map: dict[str, str]
     overrides: dict[str, str]
+
+
+@dataclass(frozen=True)
+class ContactRecord:
+    """Exact contact name and its canonical handles."""
+
+    name: str
+    handles: tuple[str, ...]
 
 
 def get_logger() -> logging.Logger:
@@ -203,9 +214,62 @@ def save_history(history_path: Path, history: dict) -> None:
     history_path.write_text(json.dumps(history, indent=2, sort_keys=True))
 
 
+def dedupe_strings(values: list[str]) -> tuple[str, ...]:
+    """Return unique strings in insertion order."""
+    seen: set[str] = set()
+    deduped: list[str] = []
+    for value in values:
+        if value in seen:
+            continue
+        seen.add(value)
+        deduped.append(value)
+    return tuple(deduped)
+
+
 def normalize_email(email: str) -> str:
     """Normalize emails for matching."""
     return email.strip().strip("<>").lower()
+
+
+def looks_like_email(token: str) -> bool:
+    """Return True when the token looks like an email address."""
+    return "@" in token.strip()
+
+
+def canonical_phone(raw: str) -> str | None:
+    """Return the canonical phone representation for a token."""
+    stripped = raw.strip()
+    if not stripped:
+        return None
+    if "urn:" in stripped:
+        return None
+
+    digits = re.sub(r"\D", "", stripped)
+    if not digits:
+        return None
+
+    if stripped.startswith("+"):
+        return f"+{digits}"
+    if len(digits) == 11 and digits.startswith("1"):
+        return f"+{digits}"
+    if len(digits) == 10:
+        return f"+1{digits}"
+    return digits
+
+
+def canonical_handle(raw: str) -> str | None:
+    """Return the canonical export handle for a token."""
+    stripped = raw.strip().strip("<>")
+    if not stripped:
+        return None
+    if looks_like_email(stripped):
+        return normalize_email(stripped)
+
+    phone = canonical_phone(stripped)
+    if phone is not None:
+        return phone
+
+    return stripped.casefold()
 
 
 def phone_keys(raw: str) -> list[str]:
@@ -224,64 +288,144 @@ def phone_keys(raw: str) -> list[str]:
     return keys
 
 
-def load_contacts_from_macos() -> dict[str, str]:
-    """Load contacts from the macOS AddressBook database."""
+def handle_lookup_keys(raw: str) -> tuple[str, ...]:
+    """Build the exact-match lookup keys for a handle token."""
+    stripped = raw.strip().strip("<>")
+    if not stripped:
+        return ()
+    if looks_like_email(stripped):
+        return (normalize_email(stripped),)
+
+    phone = canonical_phone(stripped)
+    if phone is None:
+        return (stripped.casefold(),)
+
+    keys = phone_keys(phone)
+    keys.append(phone)
+    return dedupe_strings(keys)
+
+
+def build_contact_name(first: str | None, last: str | None) -> str:
+    """Build a display name from first/last parts."""
+    name_parts = [part for part in (first, last) if part]
+    return " ".join(name_parts).strip()
+
+
+def build_contact_records(
+    contact_names: dict[str, str],
+    contact_handles: dict[str, set[str]],
+) -> list[ContactRecord]:
+    """Build deduplicated contact records from aggregated rows."""
+    seen: set[tuple[str, tuple[str, ...]]] = set()
+    records: list[ContactRecord] = []
+    for key, name in contact_names.items():
+        handles = tuple(sorted(contact_handles.get(key, set())))
+        if not handles:
+            continue
+
+        dedupe_key = (name.casefold(), handles)
+        if dedupe_key in seen:
+            continue
+
+        seen.add(dedupe_key)
+        records.append(ContactRecord(name=name, handles=handles))
+    records.sort(key=lambda record: (record.name.casefold(), record.handles))
+    return records
+
+
+def load_contact_records_from_macos() -> list[ContactRecord]:
+    """Load exact contact records from macOS Contacts."""
     base = Path("~/Library/Application Support/AddressBook").expanduser()
     sources = list(base.glob("Sources/*/AddressBook-v22.abcddb"))
     if (base / "AddressBook-v22.abcddb").exists():
         sources.append(base / "AddressBook-v22.abcddb")
-    mapping: dict[str, str] = {}
+
+    contact_names: dict[str, str] = {}
+    contact_handles: dict[str, set[str]] = {}
     for db in sources:
         with sqlite3.connect(db) as conn:
             cur = conn.cursor()
             cur.execute(
                 """
-                SELECT r.ZFIRSTNAME, r.ZLASTNAME, p.ZFULLNUMBER, e.ZADDRESSNORMALIZED
+                SELECT r.Z_PK, r.ZFIRSTNAME, r.ZLASTNAME, p.ZFULLNUMBER, e.ZADDRESSNORMALIZED
                 FROM ZABCDRECORD AS r
                 LEFT JOIN ZABCDPHONENUMBER AS p ON r.Z_PK = p.ZOWNER
                 LEFT JOIN ZABCDEMAILADDRESS AS e ON r.Z_PK = e.ZOWNER
                 """
             )
-            for first, last, phone, email in cur.fetchall():
-                name_parts = [p for p in [first, last] if p]
-                name = " ".join(name_parts).strip()
+            for record_id, first, last, phone, email in cur.fetchall():
+                name = build_contact_name(first, last)
                 if not name:
                     continue
-                if email:
-                    mapping[normalize_email(email)] = name
-                if phone:
-                    for key in phone_keys(phone):
-                        mapping[key] = name
-    return mapping
+
+                key = f"{db}:{record_id}"
+                if key not in contact_names:
+                    contact_names[key] = name
+                    contact_handles[key] = set()
+
+                for raw_handle in (phone, email):
+                    handle = canonical_handle(str(raw_handle or ""))
+                    if handle is None:
+                        continue
+                    contact_handles[key].add(handle)
+
+    return build_contact_records(contact_names, contact_handles)
 
 
-def load_contacts_from_ios_backup(backup_root: Path) -> dict[str, str]:
-    """Load contacts from an iOS backup database."""
+def load_contact_records_from_ios_backup(backup_root: Path) -> list[ContactRecord]:
+    """Load exact contact records from an iOS backup."""
     contacts_db = backup_root / IOS_CONTACTS_REL
     if not contacts_db.exists():
-        return {}
-    mapping: dict[str, str] = {}
+        return []
+
+    contact_names: dict[str, str] = {}
+    contact_handles: dict[str, set[str]] = {}
     with sqlite3.connect(contacts_db) as conn:
         cur = conn.cursor()
         cur.execute(
             """
-            SELECT c0First, c1Last, c16Phone, c17Email
+            SELECT rowid, c0First, c1Last, c16Phone, c17Email
             FROM ABPersonFullTextSearch_content
             """
         )
-        for first, last, phones, emails in cur.fetchall():
-            name_parts = [p for p in [first, last] if p]
-            name = " ".join(name_parts).strip()
+        for record_id, first, last, phones, emails in cur.fetchall():
+            name = build_contact_name(first, last)
             if not name:
                 continue
-            if emails:
-                for token in str(emails).split():
-                    mapping[normalize_email(token)] = name
-            if phones:
-                for token in str(phones).split():
-                    for key in phone_keys(token):
-                        mapping[key] = name
+
+            key = str(record_id)
+            if key not in contact_names:
+                contact_names[key] = name
+                contact_handles[key] = set()
+
+            for field in (phones, emails):
+                for token in str(field or "").split():
+                    handle = canonical_handle(token)
+                    if handle is None:
+                        continue
+                    contact_handles[key].add(handle)
+
+    return build_contact_records(contact_names, contact_handles)
+
+
+def build_contacts_map(records: list[ContactRecord]) -> dict[str, str]:
+    """Build the replacement lookup map from contact records."""
+    mapping: dict[str, str] = {}
+    for record in records:
+        for handle in record.handles:
+            for alias in handle_lookup_keys(handle):
+                mapping[alias] = record.name
     return mapping
+
+
+def load_contacts_from_macos() -> dict[str, str]:
+    """Load contacts from the macOS AddressBook database."""
+    return build_contacts_map(load_contact_records_from_macos())
+
+
+def load_contacts_from_ios_backup(backup_root: Path) -> dict[str, str]:
+    """Load contacts from an iOS backup database."""
+    return build_contacts_map(load_contact_records_from_ios_backup(backup_root))
 
 
 def load_contacts_json(path: Path) -> dict:
@@ -297,6 +441,159 @@ def load_contacts_json(path: Path) -> dict:
 def save_contacts_json(path: Path, data: dict) -> None:
     """Persist overrides to JSON."""
     path.write_text(json.dumps(data, indent=2, sort_keys=True))
+
+
+def load_contact_records_for_platform(
+    platform: str | None,
+    db_path: str | None,
+) -> list[ContactRecord]:
+    """Load exact contact records for the selected source platform."""
+    if platform == "iOS":
+        if not db_path:
+            return []
+        return load_contact_records_from_ios_backup(Path(db_path))
+
+    return load_contact_records_from_macos()
+
+
+def resolve_messages_db_path(platform: str | None, db_path: str | None) -> Path:
+    """Resolve the message database path used for exact handle lookups."""
+    if platform == "iOS":
+        if not db_path:
+            return IOS_MESSAGES_REL
+
+        backup_root = Path(db_path).expanduser()
+        if backup_root.is_file():
+            return backup_root
+        return backup_root / IOS_MESSAGES_REL
+
+    if db_path:
+        return Path(db_path).expanduser()
+
+    return MACOS_MESSAGES_DB
+
+
+def load_message_handles(platform: str | None, db_path: str | None) -> tuple[str, ...]:
+    """Load exact handles from the messages database when available."""
+    database_path = resolve_messages_db_path(platform, db_path)
+    if not database_path.exists():
+        return ()
+
+    with sqlite3.connect(database_path) as conn:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT id
+            FROM handle
+            WHERE id IS NOT NULL
+              AND TRIM(id) != ''
+            """
+        )
+        handles = [str(value).strip() for (value,) in cur.fetchall() if str(value).strip()]
+    return tuple(sorted(set(handles)))
+
+
+def build_handle_alias_index(handles: tuple[str, ...]) -> dict[str, set[str]]:
+    """Map exact lookup aliases to canonical export handles."""
+    index: dict[str, set[str]] = {}
+    for handle in handles:
+        for alias in handle_lookup_keys(handle):
+            index.setdefault(alias, set()).add(handle)
+    return index
+
+
+def resolve_direct_handles(
+    token: str,
+    alias_index: dict[str, set[str]],
+) -> tuple[str, ...]:
+    """Resolve an exact handle token to one or more canonical export handles."""
+    matched: list[str] = []
+    for alias in handle_lookup_keys(token):
+        matched.extend(sorted(alias_index.get(alias, set())))
+    return dedupe_strings(matched)
+
+
+def project_contact_handles(
+    handles: tuple[str, ...],
+    alias_index: dict[str, set[str]],
+) -> tuple[str, ...]:
+    """Project contact handles onto exact known handles when available."""
+    projected: list[str] = []
+    for handle in handles:
+        direct_handles = resolve_direct_handles(handle, alias_index)
+        if not direct_handles:
+            continue
+        projected.extend(direct_handles)
+    return dedupe_strings(projected)
+
+
+def exact_name_matches(
+    token: str,
+    contact_records: list[ContactRecord],
+) -> list[ContactRecord]:
+    """Return exact case-insensitive contact name matches for a token."""
+    wanted = token.strip().casefold()
+    return [record for record in contact_records if record.name.casefold() == wanted]
+
+
+def format_contact_candidate(record: ContactRecord) -> str:
+    """Format a contact record for ambiguity messages."""
+    handles = ", ".join(record.handles)
+    return f"{record.name} [{handles}]"
+
+
+def resolve_filter_token(
+    token: str,
+    alias_index: dict[str, set[str]],
+    contact_records: list[ContactRecord],
+) -> tuple[str, ...]:
+    """Resolve a single filter token to exact canonical export handles."""
+    stripped = token.strip()
+    if not stripped:
+        raise ValueError("Conversation filter contains an empty token.")
+
+    direct_handles = resolve_direct_handles(stripped, alias_index)
+    if direct_handles:
+        return direct_handles
+
+    name_matches = exact_name_matches(stripped, contact_records)
+    if len(name_matches) == 1:
+        projected = project_contact_handles(name_matches[0].handles, alias_index)
+        if projected:
+            return projected
+        raise ValueError(
+            f"Selected filter `{stripped}` does not map to any known message handles."
+        )
+
+    if len(name_matches) > 1:
+        candidates = "; ".join(format_contact_candidate(record) for record in name_matches)
+        raise ValueError(
+            f"Selected filter `{stripped}` matches multiple contacts. "
+            f"Use an exact handle instead: {candidates}"
+        )
+
+    raise ValueError(
+        f"Selected filter `{stripped}` does not exactly match any known handle or contact."
+    )
+
+
+def resolve_conversation_filter_strict(
+    raw_filter: str,
+    platform: str | None,
+    db_path: str | None,
+) -> str:
+    """Resolve a raw conversation filter to exact canonical export handles."""
+    if not raw_filter.strip():
+        return ""
+
+    contact_records = load_contact_records_for_platform(platform, db_path)
+    alias_index = build_handle_alias_index(load_message_handles(platform, db_path))
+
+    resolved_handles: list[str] = []
+    for token in raw_filter.split(","):
+        resolved_handles.extend(resolve_filter_token(token, alias_index, contact_records))
+
+    return ",".join(dedupe_strings(resolved_handles))
 
 
 def extract_tokens_from_filename(name: str) -> set[str]:
@@ -385,6 +682,7 @@ class HelpDefaults:
     format: str
     copy_method: str
     conversation_filter: str
+    profile: str
     use_caller_id: str
     output_dir: str
 
@@ -400,6 +698,7 @@ def resolve_help_defaults(cli_config: CLIConfig | None = None) -> HelpDefaults:
         format=exp.format,
         copy_method=exp.copy_method,
         conversation_filter=exp.conversation_filter or "none",
+        profile=exp.default_profile or "none",
         use_caller_id="enabled" if exp.use_caller_id else "disabled",
         output_dir=exp.output_dir,
     )
@@ -412,6 +711,7 @@ def _fallback_help_defaults() -> HelpDefaults:
         format="txt",
         copy_method="full",
         conversation_filter="none",
+        profile="none",
         use_caller_id="enabled",
         output_dir="./data/messages/sms",
     )
@@ -425,62 +725,100 @@ def _with_default(help_text: str, default_value: str) -> str:
 def add_export_args(
     parser: argparse.ArgumentParser,
     help_defaults: HelpDefaults | None = None,
+    with_defaults: bool = True,
 ) -> None:
     """Add export arguments to a parser."""
     defaults = help_defaults or _fallback_help_defaults()
+    default_format = "txt" if with_defaults else argparse.SUPPRESS
+    default_copy_method = "full" if with_defaults else argparse.SUPPRESS
+    default_bool = False if with_defaults else argparse.SUPPRESS
+    default_value = None if with_defaults else argparse.SUPPRESS
 
     parser.add_argument(
         "-p",
         "--platform",
         choices=["macOS", "iOS"],
+        default=default_value,
         help=_with_default("Source platform", defaults.platform),
     )
-    parser.add_argument("-d", "--db-path", help="Path to macOS chat.db or iOS backup root")
+    parser.add_argument(
+        "-d",
+        "--db-path",
+        default=default_value,
+        help="Path to macOS chat.db or iOS backup root",
+    )
     parser.add_argument(
         "-f",
         "--format",
-        default="txt",
+        default=default_format,
         choices=["txt", "html"],
         help=_with_default("Output format", defaults.format),
     )
     parser.add_argument(
         "-c",
         "--copy-method",
-        default="full",
+        default=default_copy_method,
         choices=["disabled", "clone", "basic", "full"],
         help=_with_default("Attachment copy method", defaults.copy_method),
     )
-    parser.add_argument("-s", "--start-date", help="Start date (natural language)")
-    parser.add_argument("-e", "--end-date", help="End date (natural language, before this date)")
+    parser.add_argument("-s", "--start-date", default=default_value, help="Start date (natural language)")
+    parser.add_argument(
+        "-e",
+        "--end-date",
+        default=default_value,
+        help="End date (natural language, before this date)",
+    )
     parser.add_argument(
         "-u",
         "--use-caller-id",
         action="store_true",
+        default=default_bool,
         help=_with_default("Use caller ID instead of Me", defaults.use_caller_id),
     )
-    parser.add_argument(
+    selector_group = parser.add_mutually_exclusive_group()
+    selector_group.add_argument(
         "-k",
         "--conversation-filter",
+        default=default_value,
         help=_with_default("Comma-separated filter string", defaults.conversation_filter),
+    )
+    selector_group.add_argument(
+        "--profile",
+        default=default_value,
+        help=_with_default("Saved profile name", defaults.profile),
+    )
+    selector_group.add_argument(
+        "--wizard",
+        action="store_true",
+        default=default_bool,
+        help="Force the interactive wizard even when a default profile exists",
     )
     parser.add_argument(
         "-o",
         "--export-path",
+        default=default_value,
         help=_with_default("Output directory", defaults.output_dir),
     )
-    parser.add_argument("-j", "--contacts-json", help="Path to contacts overrides JSON")
-    parser.add_argument("-y", "--history-json", help="Path to history JSON")
-    parser.add_argument("-g", "--diagnostics", action="store_true")
-    parser.add_argument("-l", "--no-lazy", action="store_true")
-    parser.add_argument("-r", "--version", action="store_true", help="Show exporter version")
+    parser.add_argument("-j", "--contacts-json", default=default_value, help="Path to contacts overrides JSON")
+    parser.add_argument("-y", "--history-json", default=default_value, help="Path to history JSON")
+    parser.add_argument("-g", "--diagnostics", action="store_true", default=default_bool)
+    parser.add_argument("-l", "--no-lazy", action="store_true", default=default_bool)
+    parser.add_argument(
+        "-r",
+        "--version",
+        action="store_true",
+        default=default_bool,
+        help="Show exporter version",
+    )
     parser.add_argument(
         "-w",
         "--snapshot",
         action="store_true",
+        default=default_bool,
         help="Create a new timestamped export instead of updating an existing one",
     )
-    parser.add_argument("-n", "--non-interactive", action="store_true")
-    parser.add_argument("-v", "--verbose", action="store_true")
+    parser.add_argument("-n", "--non-interactive", action="store_true", default=default_bool)
+    parser.add_argument("-v", "--verbose", action="store_true", default=default_bool)
 
 
 def build_export_parser(
@@ -545,6 +883,13 @@ def build_export_fallback_parser(
     parser = argparse.ArgumentParser(add_help=False)
     add_export_args(parser, help_defaults=help_defaults)
     parser.set_defaults(command="export", snapshot=False)
+    return parser
+
+
+def build_export_presence_parser() -> argparse.ArgumentParser:
+    """Build a parser that records only explicitly provided export options."""
+    parser = argparse.ArgumentParser(add_help=False)
+    add_export_args(parser, with_defaults=False)
     return parser
 
 
@@ -618,7 +963,8 @@ def collect_inputs_interactive(
     platform, db_path = resolve_platform_and_db(None, None, True)
     dates = resolve_date_range(last_end_dt)
 
-    conv_filter = prompt("Conversation filter (comma-separated, enter to skip)", default="")
+    raw_filter = prompt("Conversation filter (comma-separated, enter to skip)", default="")
+    conv_filter = resolve_conversation_filter_strict(raw_filter, platform, db_path)
     use_caller_id = yes_no("Use caller ID instead of Me", default=True)
 
     options = ExportOptions(
@@ -631,6 +977,7 @@ def collect_inputs_interactive(
         diagnostics=False,
         no_lazy=False,
         version=False,
+        profile_name="",
     )
     paths = PathsConfig(
         export_path=resolve_output_path(export_base),
@@ -649,16 +996,22 @@ def collect_inputs_cli(
 ) -> RunConfig:
     """Collect inputs for non-interactive runs."""
     platform, db_path = resolve_platform_and_db(args.platform, args.db_path, False)
+    conv_filter = resolve_conversation_filter_strict(
+        args.conversation_filter or "",
+        platform,
+        db_path,
+    )
     options = ExportOptions(
         platform=platform,
         db_path=db_path,
-        conv_filter=args.conversation_filter or "",
+        conv_filter=conv_filter,
         use_caller_id=args.use_caller_id,
         copy_method=args.copy_method,
         output_format=args.format,
         diagnostics=args.diagnostics,
         no_lazy=args.no_lazy,
         version=args.version,
+        profile_name=args.profile or "",
     )
     dates = DateRange(
         start=parse_date(args.start_date or "") or dt.datetime.now(),
@@ -769,6 +1122,7 @@ def build_export_meta(config_run: RunConfig) -> dict:
     """Build metadata for the current export run."""
     return {
         "conv_filter": config_run.options.conv_filter,
+        "profile": config_run.options.profile_name,
         "platform": config_run.options.platform or "",
         "last_end": (
             config_run.dates.end.isoformat(sep=" ")
@@ -820,12 +1174,17 @@ def merge_attachments(staging_dir: Path, target_dir: Path) -> int:
 def merge_export_dirs(staging_dir: Path, target_dir: Path) -> None:
     """Merge a staged export into an existing target export."""
     logger = get_logger()
+    target_dir.mkdir(parents=True, exist_ok=True)
     merge_text_files(staging_dir, target_dir)
     copied = merge_attachments(staging_dir, target_dir)
     logger.info("Merged %d new attachment(s) into %s", copied, target_dir)
 
 
-def find_update_target(export_base: Path, conv_filter: str) -> Path | None:
+def find_update_target(
+    export_base: Path,
+    conv_filter: str,
+    profile_name: str = "",
+) -> Path | None:
     """Auto-detect the existing export directory to update.
 
     Returns the matching directory or None if no suitable target is found.
@@ -836,6 +1195,12 @@ def find_update_target(export_base: Path, conv_filter: str) -> Path | None:
 
     if len(candidates) == 1:
         return candidates[0]
+
+    if profile_name:
+        for path in candidates:
+            meta = load_export_meta(path)
+            if meta.get("profile", "") == profile_name:
+                return path
 
     for path in candidates:
         meta = load_export_meta(path)
@@ -860,7 +1225,8 @@ def resolve_update_target(
         return chosen
 
     conv_filter = getattr(args, "conversation_filter", None) or ""
-    target = find_update_target(export_base, conv_filter)
+    profile_name = getattr(args, "profile", None) or ""
+    target = find_update_target(export_base, conv_filter, profile_name=profile_name)
     if target:
         return target
 
@@ -878,6 +1244,27 @@ def resolve_update_target(
     return None
 
 
+def staging_has_content(staging_dir: Path) -> bool:
+    """Return True when the staging directory contains any files or directories."""
+    if not staging_dir.exists():
+        return False
+    return any(staging_dir.iterdir())
+
+
+def cleanup_staging_dir(staging_dir: Path) -> None:
+    """Remove the staging run directory and its parent when empty."""
+    if not staging_dir.exists():
+        return
+
+    shutil.rmtree(staging_dir)
+    staging_root = staging_dir.parent
+    if not staging_root.exists():
+        return
+    if any(staging_root.iterdir()):
+        return
+    staging_root.rmdir()
+
+
 def run_update_export(
     config_run: RunConfig,
     target_dir: Path,
@@ -888,44 +1275,55 @@ def run_update_export(
     logger = get_logger()
     staging_dir = export_base / STAGING_DIR / dt.datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
     staging_dir.mkdir(parents=True, exist_ok=True)
+    completed = False
 
-    staging_config = RunConfig(
-        options=config_run.options,
-        dates=config_run.dates,
-        paths=PathsConfig(
-            export_path=staging_dir,
-            contacts_json=config_run.paths.contacts_json,
-            history_json=config_run.paths.history_json,
-        ),
-    )
+    try:
+        staging_config = RunConfig(
+            options=config_run.options,
+            dates=config_run.dates,
+            paths=PathsConfig(
+                export_path=staging_dir,
+                contacts_json=config_run.paths.contacts_json,
+                history_json=config_run.paths.history_json,
+            ),
+        )
 
-    warn_on_date_range(staging_config)
-    run_exporter(staging_config)
+        warn_on_date_range(staging_config)
+        run_exporter(staging_config)
 
-    contacts_json = load_contacts_json(contacts_path)
-    overrides = contacts_json.get("overrides", {})
-    contacts_map = load_contacts_for_platform(
-        config_run.options.platform, config_run.options.db_path
-    )
-    postprocess_exports(
-        PostprocessContext(
-            export_dir=staging_dir,
-            contacts_map=contacts_map,
-            overrides=overrides,
-        ),
-        ask_for_missing=False,
-    )
-    contacts_json["overrides"] = overrides
-    save_contacts_json(contacts_path, contacts_json)
+        contacts_json = load_contacts_json(contacts_path)
+        overrides = contacts_json.get("overrides", {})
+        contacts_map = load_contacts_for_platform(
+            config_run.options.platform, config_run.options.db_path
+        )
+        postprocess_exports(
+            PostprocessContext(
+                export_dir=staging_dir,
+                contacts_map=contacts_map,
+                overrides=overrides,
+            ),
+            ask_for_missing=False,
+        )
+        contacts_json["overrides"] = overrides
+        save_contacts_json(contacts_path, contacts_json)
 
-    merge_export_dirs(staging_dir, target_dir)
+        merge_export_dirs(staging_dir, target_dir)
 
-    meta = load_export_meta(target_dir)
-    meta.update(build_export_meta(config_run))
-    save_export_meta(target_dir, meta)
+        meta = load_export_meta(target_dir)
+        meta.update(build_export_meta(config_run))
+        save_export_meta(target_dir, meta)
+        completed = True
+    finally:
+        if completed:
+            cleanup_staging_dir(staging_dir)
+            logger.info("Update complete: %s", target_dir)
+            return
 
-    shutil.rmtree(staging_dir)
-    logger.info("Update complete: %s", target_dir)
+        if not staging_has_content(staging_dir):
+            cleanup_staging_dir(staging_dir)
+            return
+
+        eprint(f"Update failed. Preserved staged files at: {staging_dir}")
 
 
 def list_recent_exports(export_base: Path, limit: int = 3) -> list[Path]:
@@ -1037,19 +1435,27 @@ def resolve_update_dates(
     return DateRange(start=start_dt, end=end_dt)
 
 
-def default_export_dir(export_base: Path, conv_filter: str) -> Path:
+def default_export_dir(export_base: Path, conv_filter: str, profile_name: str = "") -> Path:
     """Derive the default export directory name from the conversation filter."""
+    if profile_name:
+        return export_base / sanitize_label(profile_name)
     if conv_filter:
         return export_base / sanitize_label(conv_filter)
     return export_base / dt.datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
 
 
-def bootstrap_export_dir(export_base: Path, args: argparse.Namespace) -> Path:
+def bootstrap_export_dir(export_base: Path, conv_filter: str, profile_name: str = "") -> Path:
     """Create the initial export directory for a new continuous export."""
-    conv_filter = getattr(args, "conversation_filter", None) or ""
-    export_dir = default_export_dir(export_base, conv_filter)
+    export_dir = default_export_dir(export_base, conv_filter, profile_name=profile_name)
     export_dir.mkdir(parents=True, exist_ok=True)
     return export_dir
+
+
+def announce_profile(profile_name: str) -> None:
+    """Print the selected profile before export starts."""
+    if not profile_name:
+        return
+    eprint(f"Using profile: {profile_name}")
 
 
 def run_continuous(
@@ -1061,12 +1467,19 @@ def run_continuous(
     interactive: bool,
 ) -> None:
     """Orchestrate a continuous export: update existing or bootstrap new."""
+    platform, db_path = resolve_platform_and_db(args.platform, args.db_path, interactive)
+    conv_filter = resolve_conversation_filter_strict(
+        args.conversation_filter or "",
+        platform,
+        db_path,
+    )
+    args.conversation_filter = conv_filter
+
+    profile_name = args.profile or ""
     target_dir = resolve_update_target(export_base, args, interactive)
     if not target_dir:
-        target_dir = bootstrap_export_dir(export_base, args)
+        target_dir = bootstrap_export_dir(export_base, conv_filter, profile_name=profile_name)
         eprint(f"No existing export found. Creating: {target_dir}")
-
-    platform, db_path = resolve_platform_and_db(args.platform, args.db_path, interactive)
 
     meta = load_export_meta(target_dir)
     has_prior = bool(meta.get("last_end"))
@@ -1081,13 +1494,14 @@ def run_continuous(
     options = ExportOptions(
         platform=platform,
         db_path=db_path,
-        conv_filter=args.conversation_filter or "",
+        conv_filter=conv_filter,
         use_caller_id=args.use_caller_id,
         copy_method=args.copy_method,
         output_format=args.format,
         diagnostics=args.diagnostics,
         no_lazy=args.no_lazy,
         version=args.version,
+        profile_name=profile_name,
     )
     config_run = RunConfig(
         options=options,
@@ -1099,6 +1513,7 @@ def run_continuous(
         ),
     )
 
+    announce_profile(profile_name)
     run_update_export(config_run, target_dir, export_base, contacts_path)
 
     update_history_end(history, dates.end)
@@ -1129,6 +1544,7 @@ def run_snapshot(
             contacts_path=contacts_path,
         )
 
+    announce_profile(config_run.options.profile_name)
     warn_on_date_range(config_run)
     run_exporter(config_run)
 
@@ -1160,30 +1576,103 @@ def run_snapshot(
     eprint(f"Export complete: {config_run.paths.export_path}")
 
 
-def apply_config_defaults(args: argparse.Namespace, cli_config: CLIConfig) -> None:
+def require_profile(cli_config: CLIConfig, name: str) -> ProfileConfig:
+    """Return a configured profile or raise a clear error."""
+    profile = cli_config.profiles.get(name)
+    if not profile:
+        raise ValueError(f"Unknown profile `{name}` in {cli_config.path}")
+    if not profile.handles:
+        raise ValueError(f"Profile `{name}` has no handles configured.")
+    return profile
+
+
+def resolve_selected_profile(
+    args: argparse.Namespace,
+    cli_config: CLIConfig,
+    explicit_options: set[str],
+) -> ProfileConfig | None:
+    """Resolve the selected profile from CLI flags or config defaults."""
+    if getattr(args, "wizard", False):
+        return None
+    if "profile" in explicit_options:
+        return require_profile(cli_config, args.profile)
+    if "conversation_filter" in explicit_options:
+        return None
+    if not cli_config.export.default_profile:
+        return None
+    return require_profile(cli_config, cli_config.export.default_profile)
+
+
+def apply_profile_defaults(
+    args: argparse.Namespace,
+    profile: ProfileConfig,
+    explicit_options: set[str],
+) -> None:
+    """Apply saved profile overrides to unresolved CLI arguments."""
+    if "platform" not in explicit_options and profile.platform:
+        args.platform = profile.platform
+    if "format" not in explicit_options and profile.format:
+        args.format = profile.format
+    if "copy_method" not in explicit_options and profile.copy_method:
+        args.copy_method = profile.copy_method
+    if "use_caller_id" not in explicit_options and profile.use_caller_id is not None:
+        args.use_caller_id = profile.use_caller_id
+    if "conversation_filter" not in explicit_options:
+        args.conversation_filter = ",".join(profile.handles)
+    args.profile = profile.name
+
+
+def apply_config_defaults(
+    args: argparse.Namespace,
+    cli_config: CLIConfig,
+    explicit_options: set[str],
+) -> ProfileConfig | None:
     """Apply config.ini defaults to args that weren't set on the command line."""
     exp = cli_config.export
 
-    if not getattr(args, "platform", None) and exp.platform:
+    if "platform" not in explicit_options and exp.platform:
         args.platform = exp.platform
 
-    if not getattr(args, "conversation_filter", None) and exp.conversation_filter:
-        args.conversation_filter = exp.conversation_filter
-
-    if not getattr(args, "use_caller_id", False) and exp.use_caller_id:
+    if "use_caller_id" not in explicit_options and exp.use_caller_id:
         args.use_caller_id = True
 
-    if getattr(args, "format", "txt") == "txt" and exp.format:
+    if "format" not in explicit_options and exp.format:
         args.format = exp.format
 
-    if getattr(args, "copy_method", "full") == "full" and exp.copy_method:
+    if "copy_method" not in explicit_options and exp.copy_method:
         args.copy_method = exp.copy_method
+
+    selected_profile = resolve_selected_profile(args, cli_config, explicit_options)
+    if selected_profile:
+        apply_profile_defaults(args, selected_profile, explicit_options)
+        return selected_profile
+
+    if "conversation_filter" not in explicit_options and exp.conversation_filter:
+        args.conversation_filter = exp.conversation_filter
+
+    return None
+
+
+def should_run_export_wizard(
+    raw_export_argv: list[str],
+    args: argparse.Namespace,
+    selected_profile: ProfileConfig | None,
+) -> bool:
+    """Return True when export should fall back to the interactive wizard."""
+    if getattr(args, "non_interactive", False):
+        return False
+    if getattr(args, "wizard", False):
+        return True
+    if selected_profile is not None:
+        return False
+    return not raw_export_argv
 
 
 def main() -> None:
     """Run the CLI entrypoint."""
     cli_config = config.load_config()
     help_defaults = resolve_help_defaults(cli_config)
+    raw_argv = sys.argv[1:]
 
     parser = build_root_parser(help_defaults=help_defaults)
     args = parser.parse_args()
@@ -1196,13 +1685,26 @@ def main() -> None:
         command = "export"
 
     configure_logging(args.verbose)
-    apply_config_defaults(args, cli_config)
+    raw_export_argv = raw_argv
+    if raw_export_argv and raw_export_argv[0] == "export":
+        raw_export_argv = raw_export_argv[1:]
 
-    export_base = config.base_output_dir(cli_config)
+    explicit_options: set[str] = set()
+    if command == "export":
+        presence_args = build_export_presence_parser().parse_args(raw_export_argv)
+        explicit_options = set(vars(presence_args))
+
+    selected_profile = apply_config_defaults(args, cli_config, explicit_options)
+
+    export_base = config.base_output_dir(cli_config, profile=selected_profile)
     ensure_export_dir(export_base)
 
     contacts_path = resolve_contacts_path(export_base, args)
-    interactive = not args.non_interactive and command == "export" and len(sys.argv) == 1
+    interactive = command == "export" and should_run_export_wizard(
+        raw_export_argv,
+        args,
+        selected_profile,
+    )
     relabel_interactive = not args.non_interactive and command == "relabel"
 
     if command == "relabel":

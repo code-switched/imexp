@@ -20,7 +20,21 @@ class ExportDefaults:
     format: str
     copy_method: str
     conversation_filter: str
+    default_profile: str
     use_caller_id: bool
+    output_dir: str
+
+
+@dataclass(frozen=True)
+class ProfileConfig:
+    """Saved client/project export profile."""
+
+    name: str
+    handles: tuple[str, ...]
+    platform: str
+    format: str
+    copy_method: str
+    use_caller_id: bool | None
     output_dir: str
 
 
@@ -29,6 +43,7 @@ class CLIConfig:
     """Resolved CLI configuration."""
 
     export: ExportDefaults
+    profiles: dict[str, ProfileConfig]
     path: Path
 
 
@@ -118,6 +133,51 @@ def _get_bool_value(
     return parser.getboolean(section, key)
 
 
+def _get_list_value(
+    parser: configparser.ConfigParser,
+    section: str,
+    key: str,
+) -> tuple[str, ...]:
+    """Read a newline or comma-separated list value from the config parser."""
+    raw_value = _get_value(parser, section, key)
+    if raw_value is None:
+        return ()
+
+    values: list[str] = []
+    for line in raw_value.splitlines():
+        for token in line.split(","):
+            stripped = token.strip()
+            if not stripped:
+                continue
+            if stripped in values:
+                continue
+            values.append(stripped)
+    return tuple(values)
+
+
+def _load_profiles(parser: configparser.ConfigParser) -> dict[str, ProfileConfig]:
+    """Load saved export profiles from the config parser."""
+    profiles: dict[str, ProfileConfig] = {}
+    for section in parser.sections():
+        if not section.startswith("profile."):
+            continue
+
+        name = section.partition(".")[2].strip()
+        if not name:
+            continue
+
+        profiles[name] = ProfileConfig(
+            name=name,
+            handles=_get_list_value(parser, section, "handles"),
+            platform=_get_value(parser, section, "platform") or "",
+            format=_get_value(parser, section, "format") or "",
+            copy_method=_get_value(parser, section, "copy_method") or "",
+            use_caller_id=_get_bool_value(parser, section, "use_caller_id"),
+            output_dir=_get_value(parser, section, "output_dir") or "",
+        )
+    return profiles
+
+
 def load_config(config_path: Path | None = None) -> CLIConfig:
     """Load configuration from the config.ini file."""
     parser = configparser.ConfigParser()
@@ -134,15 +194,22 @@ def load_config(config_path: Path | None = None) -> CLIConfig:
             format=_get_value(parser, "export", "format") or "txt",
             copy_method=_get_value(parser, "export", "copy_method") or "full",
             conversation_filter=_get_value(parser, "export", "conversation_filter") or "",
+            default_profile=_get_value(parser, "export", "default_profile") or "",
             use_caller_id=_get_bool_value(parser, "export", "use_caller_id") or False,
             output_dir=output_dir,
         ),
+        profiles=_load_profiles(parser),
         path=resolved_path,
     )
 
 
-def base_output_dir(cli_config: CLIConfig | None = None) -> Path:
+def base_output_dir(
+    cli_config: CLIConfig | None = None,
+    profile: ProfileConfig | None = None,
+) -> Path:
     """Return the base output directory for exports."""
+    if profile and profile.output_dir:
+        return Path(profile.output_dir)
     if cli_config:
         return Path(cli_config.export.output_dir)
     value = os.environ.get("IMEXP_BASE_OUTPUT_DIR", "./data/messages/sms")
@@ -171,10 +238,25 @@ copy_method = full
 # Leave empty to export all conversations.
 conversation_filter =
 
+# Default saved profile for `imexp` and `imexp export` when no selector is passed.
+default_profile =
+
 # Use caller ID instead of "Me" in exports.
 use_caller_id = true
 
 # Base output directory for exports.
 # Can also be set via IMEXP_BASE_OUTPUT_DIR environment variable.
 output_dir = ./data/messages/sms
+
+# Example saved profile:
+#
+# [profile.client-name]
+# handles =
+#     +15551234567
+#     client@example.com
+# platform = macOS
+# format = txt
+# copy_method = full
+# use_caller_id = true
+# output_dir = ./data/messages/sms
 """
