@@ -1,20 +1,20 @@
 {
-  "version": "3.3.2",
+  "version": "4.0.0",
   "targets": {
     "macos-arm64": {
       "asset_name": "imessage-exporter-aarch64-apple-darwin",
       "output_name": "imessage-exporter",
-      "sha256": "5279b184100d05ee92a946fdeb4ea30f94ffe06dc0f556b5ae21743cb7bd5e17"
+      "sha256": "f7561767270322e66a1d95e5959033a1879d42e60d5295302ae50a8070e3a094"
     },
     "macos-x86_64": {
       "asset_name": "imessage-exporter-x86_64-apple-darwin",
       "output_name": "imessage-exporter",
-      "sha256": "4716159ea6340e02e26a0ed943d13d31dbcb3e063d5292f12432b614e47aa1f8"
+      "sha256": "cc6f369e45b39e8d1871804b8ba80e6fcac59d237eea661384bd0162d29820d7"
     },
     "windows-x86_64": {
       "asset_name": "imessage-exporter-x86_64-pc-windows-gnu.exe",
       "output_name": "imessage-exporter.exe",
-      "sha256": "ea94380215590fff1246b54a908d3ee4bb35fd658abe92e0ed41609d4c16d2cc"
+      "sha256": "3e60a8d186b9a628e1a3ddce676cc57e1be9f4693e9354d5d41e15bae959faa8"
     }
   }
 }
