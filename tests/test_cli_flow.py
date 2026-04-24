@@ -170,6 +170,57 @@ def test_postprocess_exports(tmp_path: Path) -> None:
     assert "Bob" in renamed_files[0].read_text()
 
 
+def test_build_profile_filename_aliases_uses_contacts_and_names() -> None:
+    """Profile aliases combine handle-derived contact names and explicit names."""
+    profile = cli.ProfileConfig(
+        name="pastor-will",
+        handles=("+19049885338", "+19048373582"),
+        names=("Will Junior",),
+        label="Pastor Will",
+        slug="pastor-will",
+        platform="",
+        format="",
+        copy_method="",
+        use_caller_id=None,
+        output_dir="",
+    )
+
+    aliases = cli.build_profile_filename_aliases(
+        profile,
+        {
+            "+19049885338": "Pastor Will Simpson",
+            "+19048373582": "Will Junior",
+        },
+    )
+
+    assert aliases["Pastor Will Simpson"] == "Pastor Will"
+    assert aliases["Will Junior"] == "Pastor Will"
+
+
+def test_apply_filename_aliases_preserves_colliding_files(tmp_path: Path) -> None:
+    """Alias normalization does not overwrite distinct conversation files."""
+    export_dir = tmp_path / "exports"
+    export_dir.mkdir()
+    first = export_dir / "Pastor Will Simpson.txt"
+    second = export_dir / "Will Junior.txt"
+    first.write_text("one")
+    second.write_text("two")
+
+    cli.apply_filename_aliases(
+        export_dir,
+        {
+            "Pastor Will Simpson": "Pastor Will",
+            "Will Junior": "Pastor Will",
+        },
+    )
+
+    renamed_files = sorted(path.name for path in export_dir.glob("*.txt"))
+    assert renamed_files == [
+        "Pastor Will [Will Junior].txt",
+        "Pastor Will.txt",
+    ]
+
+
 def test_update_history_end() -> None:
     """History stores ISO-formatted end timestamp."""
     history: dict[str, str] = {}
@@ -190,6 +241,9 @@ def test_should_run_export_wizard_skips_when_profile_selected() -> None:
     profile = cli.ProfileConfig(
         name="client-a",
         handles=("+15551234567",),
+        names=(),
+        label="",
+        slug="",
         platform="",
         format="",
         copy_method="",

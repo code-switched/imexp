@@ -31,6 +31,9 @@ class ProfileConfig:
 
     name: str
     handles: tuple[str, ...]
+    names: tuple[str, ...]
+    label: str
+    slug: str
     platform: str
     format: str
     copy_method: str
@@ -169,6 +172,9 @@ def _load_profiles(parser: configparser.ConfigParser) -> dict[str, ProfileConfig
         profiles[name] = ProfileConfig(
             name=name,
             handles=_get_list_value(parser, section, "handles"),
+            names=_get_list_value(parser, section, "names"),
+            label=_get_value(parser, section, "label") or "",
+            slug=_get_value(parser, section, "slug") or "",
             platform=_get_value(parser, section, "platform") or "",
             format=_get_value(parser, section, "format") or "",
             copy_method=_get_value(parser, section, "copy_method") or "",
@@ -254,6 +260,11 @@ output_dir = ./data/messages/sms
 # handles =
 #     +15551234567
 #     client@example.com
+# names =
+#     Client Contact
+#     Alternate Contact Label
+# label = Client Contact
+# slug = client-contact
 # platform = macOS
 # format = txt
 # copy_method = full

@@ -36,6 +36,10 @@ def test_load_config_reads_values(tmp_path: Path) -> None:
         "handles =\n"
         "    +15551234567\n"
         "    client@example.com\n"
+        "names =\n"
+        "    Client Contact\n"
+        "label = Client Contact\n"
+        "slug = client-contact\n"
         "copy_method = clone\n"
     )
     cfg = config.load_config(config_path=ini_path)
@@ -47,6 +51,9 @@ def test_load_config_reads_values(tmp_path: Path) -> None:
     assert cfg.export.use_caller_id is False
     assert cfg.export.output_dir == "/tmp/exports"
     assert cfg.profiles["client-a"].handles == ("+15551234567", "client@example.com")
+    assert cfg.profiles["client-a"].names == ("Client Contact",)
+    assert cfg.profiles["client-a"].label == "Client Contact"
+    assert cfg.profiles["client-a"].slug == "client-contact"
     assert cfg.profiles["client-a"].copy_method == "clone"
 
 
@@ -172,6 +179,10 @@ def test_apply_config_defaults_selects_default_profile(tmp_path: Path) -> None:
         "handles =\n"
         "    +15551234567\n"
         "    client@example.com\n"
+        "names =\n"
+        "    Client Contact\n"
+        "label = Client Contact\n"
+        "slug = client-contact\n"
         "platform = iOS\n"
         "copy_method = basic\n"
         "format = html\n"
@@ -199,6 +210,8 @@ def test_apply_config_defaults_selects_default_profile(tmp_path: Path) -> None:
     assert args.use_caller_id is True
     assert args.conversation_filter == "+15551234567,client@example.com"
     assert config.base_output_dir(cfg, profile=profile) == Path("/tmp/client-a")
+    assert cli.profile_display_label(profile) == "Client Contact"
+    assert cli.profile_folder_name(profile) == "client-contact"
 
 
 def test_apply_config_defaults_explicit_profile_overrides_default(tmp_path: Path) -> None:

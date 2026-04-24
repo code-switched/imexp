@@ -138,6 +138,18 @@ def sanitize_label(label: str) -> str:
     return safe.strip("-") or "export"
 
 
+def profile_display_label(profile: ProfileConfig) -> str:
+    """Return the human-friendly display label for a profile."""
+    return profile.label or profile.name
+
+
+def profile_folder_name(profile: ProfileConfig) -> str:
+    """Return the filesystem-safe folder name for a profile."""
+    if profile.slug:
+        return sanitize_label(profile.slug)
+    return sanitize_label(profile_display_label(profile))
+
+
 def list_ios_backups(root: Path) -> list[dict]:
     """Enumerate iOS backups and their metadata."""
     backups = []
@@ -672,6 +684,86 @@ def postprocess_exports(context: PostprocessContext, ask_for_missing: bool = Tru
             new_name = replace_in_text(new_name, key, replacements[key])
         if new_name != file_path.name:
             file_path.rename(file_path.with_name(new_name))
+
+
+def build_profile_filename_aliases(
+    profile: ProfileConfig | None,
+    contacts_map: dict[str, str],
+) -> dict[str, str]:
+    """Build filename-only display aliases for the selected profile."""
+    if profile is None:
+        return {}
+
+    target = profile_display_label(profile).strip()
+    if not target:
+        return {}
+
+    aliases: dict[str, str] = {}
+    for handle in profile.handles:
+        if handle.casefold() != target.casefold():
+            aliases[handle] = target
+        for alias_key in handle_lookup_keys(handle):
+            contact_name = contacts_map.get(alias_key)
+            if not contact_name:
+                continue
+            if contact_name.casefold() == target.casefold():
+                continue
+            aliases[contact_name] = target
+
+    for name in profile.names:
+        stripped = name.strip()
+        if not stripped:
+            continue
+        if stripped.casefold() == target.casefold():
+            continue
+        aliases[stripped] = target
+
+    return aliases
+
+
+def unique_renamed_path(file_path: Path, desired_name: str) -> Path:
+    """Return a collision-safe target path for a renamed export file."""
+    desired = file_path.with_name(desired_name)
+    if desired == file_path:
+        return desired
+    if not desired.exists():
+        return desired
+
+    desired_stem = Path(desired_name).stem
+    suffix = Path(desired_name).suffix
+    source_stem = Path(file_path.name).stem
+    candidate = file_path.with_name(f"{desired_stem} [{source_stem}]{suffix}")
+    if not candidate.exists():
+        return candidate
+
+    index = 2
+    while True:
+        candidate = file_path.with_name(f"{desired_stem} [{source_stem}] {index}{suffix}")
+        if not candidate.exists():
+            return candidate
+        index += 1
+
+
+def apply_filename_aliases(export_dir: Path, filename_aliases: dict[str, str]) -> None:
+    """Apply filename-only aliases after contact-based renaming."""
+    if not filename_aliases:
+        return
+
+    keys = sorted(filename_aliases.keys(), key=len, reverse=True)
+    txt_files = sorted(export_dir.rglob("*.txt"), key=lambda path: path.name.casefold())
+    for file_path in txt_files:
+        if not file_path.exists():
+            continue
+
+        new_name = file_path.name
+        for key in keys:
+            new_name = replace_in_text(new_name, key, filename_aliases[key])
+
+        if new_name == file_path.name:
+            continue
+
+        target_path = unique_renamed_path(file_path, new_name)
+        file_path.rename(target_path)
 
 
 @dataclass(frozen=True)
@@ -1270,6 +1362,7 @@ def run_update_export(
     target_dir: Path,
     export_base: Path,
     contacts_path: Path,
+    selected_profile: ProfileConfig | None = None,
 ) -> None:
     """Run an incremental export and merge into an existing directory."""
     logger = get_logger()
@@ -1303,6 +1396,10 @@ def run_update_export(
                 overrides=overrides,
             ),
             ask_for_missing=False,
+        )
+        apply_filename_aliases(
+            staging_dir,
+            build_profile_filename_aliases(selected_profile, contacts_map),
         )
         contacts_json["overrides"] = overrides
         save_contacts_json(contacts_path, contacts_json)
@@ -1435,27 +1532,39 @@ def resolve_update_dates(
     return DateRange(start=start_dt, end=end_dt)
 
 
-def default_export_dir(export_base: Path, conv_filter: str, profile_name: str = "") -> Path:
+def default_export_dir(
+    export_base: Path,
+    conv_filter: str,
+    profile: ProfileConfig | None = None,
+) -> Path:
     """Derive the default export directory name from the conversation filter."""
-    if profile_name:
-        return export_base / sanitize_label(profile_name)
+    if profile is not None:
+        return export_base / profile_folder_name(profile)
     if conv_filter:
         return export_base / sanitize_label(conv_filter)
     return export_base / dt.datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
 
 
-def bootstrap_export_dir(export_base: Path, conv_filter: str, profile_name: str = "") -> Path:
+def bootstrap_export_dir(
+    export_base: Path,
+    conv_filter: str,
+    profile: ProfileConfig | None = None,
+) -> Path:
     """Create the initial export directory for a new continuous export."""
-    export_dir = default_export_dir(export_base, conv_filter, profile_name=profile_name)
+    export_dir = default_export_dir(export_base, conv_filter, profile=profile)
     export_dir.mkdir(parents=True, exist_ok=True)
     return export_dir
 
 
-def announce_profile(profile_name: str) -> None:
+def announce_profile(profile: ProfileConfig | None) -> None:
     """Print the selected profile before export starts."""
-    if not profile_name:
+    if profile is None:
         return
-    eprint(f"Using profile: {profile_name}")
+    label = profile_display_label(profile)
+    if label == profile.name:
+        eprint(f"Using profile: {profile.name}")
+        return
+    eprint(f"Using profile: {profile.name} ({label})")
 
 
 def run_continuous(
@@ -1465,6 +1574,7 @@ def run_continuous(
     history_path: Path,
     history: dict,
     interactive: bool,
+    selected_profile: ProfileConfig | None = None,
 ) -> None:
     """Orchestrate a continuous export: update existing or bootstrap new."""
     platform, db_path = resolve_platform_and_db(args.platform, args.db_path, interactive)
@@ -1475,10 +1585,10 @@ def run_continuous(
     )
     args.conversation_filter = conv_filter
 
-    profile_name = args.profile or ""
+    profile_name = selected_profile.name if selected_profile else args.profile or ""
     target_dir = resolve_update_target(export_base, args, interactive)
     if not target_dir:
-        target_dir = bootstrap_export_dir(export_base, conv_filter, profile_name=profile_name)
+        target_dir = bootstrap_export_dir(export_base, conv_filter, profile=selected_profile)
         eprint(f"No existing export found. Creating: {target_dir}")
 
     meta = load_export_meta(target_dir)
@@ -1513,8 +1623,14 @@ def run_continuous(
         ),
     )
 
-    announce_profile(profile_name)
-    run_update_export(config_run, target_dir, export_base, contacts_path)
+    announce_profile(selected_profile)
+    run_update_export(
+        config_run,
+        target_dir,
+        export_base,
+        contacts_path,
+        selected_profile=selected_profile,
+    )
 
     update_history_end(history, dates.end)
     save_history(history_path, history)
@@ -1527,6 +1643,7 @@ def run_snapshot(
     history_path: Path,
     history: dict,
     interactive: bool,
+    selected_profile: ProfileConfig | None = None,
 ) -> None:
     """Run a snapshot export into a new timestamped directory."""
     if interactive:
@@ -1544,7 +1661,7 @@ def run_snapshot(
             contacts_path=contacts_path,
         )
 
-    announce_profile(config_run.options.profile_name)
+    announce_profile(selected_profile)
     warn_on_date_range(config_run)
     run_exporter(config_run)
 
@@ -1562,6 +1679,10 @@ def run_snapshot(
             overrides=overrides,
         ),
         ask_for_missing=interactive,
+    )
+    apply_filename_aliases(
+        config_run.paths.export_path,
+        build_profile_filename_aliases(selected_profile, contacts_map),
     )
 
     contacts_json["overrides"] = overrides
@@ -1717,10 +1838,26 @@ def main() -> None:
     history = load_history(history_path)
 
     if getattr(args, "snapshot", False):
-        run_snapshot(args, export_base, contacts_path, history_path, history, interactive)
+        run_snapshot(
+            args,
+            export_base,
+            contacts_path,
+            history_path,
+            history,
+            interactive,
+            selected_profile=selected_profile,
+        )
         return
 
-    run_continuous(args, export_base, contacts_path, history_path, history, interactive)
+    run_continuous(
+        args,
+        export_base,
+        contacts_path,
+        history_path,
+        history,
+        interactive,
+        selected_profile=selected_profile,
+    )
 
 
 if __name__ == "__main__":

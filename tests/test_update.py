@@ -319,8 +319,20 @@ def test_default_export_dir_from_filter(tmp_path: Path) -> None:
 
 def test_default_export_dir_from_profile(tmp_path: Path) -> None:
     """Profile names become the default export folder label."""
-    result = cli.default_export_dir(tmp_path, "", profile_name="client a")
-    assert result == tmp_path / "client-a"
+    profile = cli.ProfileConfig(
+        name="client-a",
+        handles=("+15551234567",),
+        names=("Client A",),
+        label="Client A",
+        slug="client-a-export",
+        platform="",
+        format="",
+        copy_method="",
+        use_caller_id=None,
+        output_dir="",
+    )
+    result = cli.default_export_dir(tmp_path, "", profile=profile)
+    assert result == tmp_path / "client-a-export"
 
 
 def test_default_export_dir_no_filter(tmp_path: Path) -> None:
@@ -339,8 +351,20 @@ def test_bootstrap_export_dir_creates_folder(tmp_path: Path) -> None:
 
 def test_bootstrap_export_dir_uses_profile_name(tmp_path: Path) -> None:
     """Bootstrap uses the profile name when one is selected."""
-    result = cli.bootstrap_export_dir(tmp_path, "", profile_name="client a")
-    assert result == tmp_path / "client-a"
+    profile = cli.ProfileConfig(
+        name="client-a",
+        handles=("+15551234567",),
+        names=(),
+        label="Client A",
+        slug="",
+        platform="",
+        format="",
+        copy_method="",
+        use_caller_id=None,
+        output_dir="",
+    )
+    result = cli.bootstrap_export_dir(tmp_path, "", profile=profile)
+    assert result == tmp_path / "Client-A"
     assert result.exists()
 
 
