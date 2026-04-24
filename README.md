@@ -91,11 +91,15 @@ output_dir = ./data/messages/sms
 handles =
     +15551234567
     client@example.com
+names =
+    Client Contact
+    Alternate Contact Label
+label = Client Contact
+slug = client-contact
 platform = macOS
 format = txt
 copy_method = full
 use_caller_id = true
-output_dir = ./data/messages/sms/client-a
 ```
 
 Then run:
@@ -113,6 +117,14 @@ imexp export --profile client-a --start-date "last 30 days"
 In v1, profile handles are exact selectors for direct chats, and group-chat inclusion is
 approximate: any group containing one of the listed handles is included because upstream filtering
 is participant-union based.
+
+Profile fields:
+
+- `handles` are the canonical selectors used for export filtering.
+- `names` are optional display aliases used only for filename normalization.
+- `label` is the human-friendly display name for that profile.
+- `slug` is the optional folder-name override. If omitted, it is derived from `label` or the
+  profile key.
 
 ### Strict filter behavior
 

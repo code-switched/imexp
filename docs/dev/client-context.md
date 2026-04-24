@@ -20,6 +20,8 @@ Profiles are the v1 entry point for this workflow.
 
 - `[export] default_profile = ...` supports a no-arg daily path.
 - `[profile.<name>] handles = ...` stores the canonical people tied to a client or project.
+- `label` and `slug` let a profile separate human display names from folder naming.
+- `names` adds filename-only aliases for display normalization without changing selectors.
 - Profile handles currently produce exact direct-chat matches and approximate group-chat inclusion.
 
 That last point is a known limitation, not an accident. Upstream filtering is participant-union
