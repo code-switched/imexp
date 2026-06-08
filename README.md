@@ -4,7 +4,9 @@ An interactive CLI wrapper for [imessage-exporter](https://github.com/ReagentX/i
 
 ## Features
 
-- **Interactive wizard** — run `imexp` with no arguments for a guided export experience
+- **Saved profiles** — define client/project presets in `config.ini` and run `imexp` with no selector
+- **Strict conversation filters** — resolve exact handles locally before calling `imessage-exporter`
+- **Interactive wizard** — run `imexp --wizard` or `imexp export --wizard` for a guided export
 - **Natural language dates** — use phrases like "last 6 months" or "2 weeks ago"
 - **Contact resolution** — automatically maps phone numbers and emails to names from your macOS or iOS Contacts database
 - **iOS backup support** — auto-detects backups and lets you pick by device name/date
@@ -49,13 +51,20 @@ pip install -e .
 
 ### Interactive mode
 
-Simply run with no arguments for the guided wizard:
+If you do not configure a default profile, running `imexp` or `imexp export` with no arguments
+starts the guided wizard:
 
 ```bash
 imexp
 ```
 
-You'll be prompted for:
+To force the wizard even when a default profile exists:
+
+```bash
+imexp --wizard
+```
+
+The wizard prompts for:
 - Platform (macOS or iOS backup)
 - Date range (natural language supported)
 - Export location
@@ -64,6 +73,73 @@ You'll be prompted for:
 
 ```bash
 imexp export --start-date "2024-01-01" --end-date "2024-06-01" --format txt
+```
+
+### Saved profiles
+
+Profiles let you define the handles you care about for a client or project and reuse them across
+repositories.
+
+Example `data/config/cli/config.ini`:
+
+```ini
+[export]
+default_profile = client-a
+output_dir = ./data/messages/sms
+
+[profile.client-a]
+handles =
+    +15551234567
+    client@example.com
+names =
+    Client Contact
+    Alternate Contact Label
+label = Client Contact
+slug = client-contact
+platform = macOS
+format = txt
+copy_method = full
+use_caller_id = true
+```
+
+Then run:
+
+```bash
+imexp
+```
+
+Or select a profile explicitly:
+
+```bash
+imexp export --profile client-a --start-date "last 30 days"
+```
+
+In v1, profile handles are exact selectors for direct chats, and group-chat inclusion is
+approximate: any group containing one of the listed handles is included because upstream filtering
+is participant-union based.
+
+Profile fields:
+
+- `handles` are the canonical selectors used for export filtering.
+- `names` are optional display aliases used only for filename normalization.
+- `label` is the human-friendly display name for that profile.
+- `slug` is the optional folder-name override. If omitted, it is derived from `label` or the
+  profile key.
+
+### Strict filter behavior
+
+`--conversation-filter` no longer passes raw free text straight through to upstream name matching.
+
+- Exact handles are normalized and matched locally first.
+- Exact contact names are matched case-insensitively and rewritten to canonical handles.
+- Ambiguous names fail and print the candidate handles.
+- No-match filters fail instead of broadening the export.
+
+Examples:
+
+```bash
+imexp export --conversation-filter "+1 (555) 123-4567"
+imexp export --conversation-filter "Alice Smith"
 ```
 
 ### Relabel existing exports
@@ -103,6 +179,10 @@ By default, files are stored in `./data/messages/sms/`:
 
 - `contacts.json` — custom name overrides for unknown numbers
 - `history.json` — tracks last export date
+- `cli/config.ini` — export defaults and saved profiles
+
+See [docs/dev/client-context.md](./docs/dev/client-context.md) for the design note behind the
+client-context workflow this tool is aiming at.
 
 ## License
 

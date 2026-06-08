@@ -29,4 +29,6 @@ def test_export_fallback_parser_defaults() -> None:
     parser = cli.build_export_fallback_parser()
     args = parser.parse_args([])
     assert args.command == "export"
+    assert args.profile is None
+    assert args.wizard is False
     assert args.verbose is False

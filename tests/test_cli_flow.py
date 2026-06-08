@@ -122,6 +122,13 @@ def test_build_export_command_ios(tmp_path: Path) -> None:
     assert "/backup" in cmd
 
 
+def test_export_parser_rejects_profile_and_filter_together() -> None:
+    """Profiles and raw conversation filters are mutually exclusive."""
+    parser = cli.build_export_fallback_parser()
+    with pytest.raises(SystemExit):
+        parser.parse_args(["--profile", "client-a", "--conversation-filter", "alice"])
+
+
 def test_load_contacts_json_empty_file(tmp_path: Path) -> None:
     """Empty contacts file yields default overrides."""
     path = tmp_path / "contacts.json"
@@ -163,12 +170,93 @@ def test_postprocess_exports(tmp_path: Path) -> None:
     assert "Bob" in renamed_files[0].read_text()
 
 
+def test_build_profile_filename_aliases_uses_contacts_and_names() -> None:
+    """Profile aliases combine handle-derived contact names and explicit names."""
+    profile = cli.ProfileConfig(
+        name="pastor-will",
+        handles=("+19049885338", "+19048373582"),
+        names=("Will Junior",),
+        label="Pastor Will",
+        slug="pastor-will",
+        platform="",
+        format="",
+        copy_method="",
+        use_caller_id=None,
+        output_dir="",
+    )
+
+    aliases = cli.build_profile_filename_aliases(
+        profile,
+        {
+            "+19049885338": "Pastor Will Simpson",
+            "+19048373582": "Will Junior",
+        },
+    )
+
+    assert aliases["Pastor Will Simpson"] == "Pastor Will"
+    assert aliases["Will Junior"] == "Pastor Will"
+
+
+def test_apply_filename_aliases_preserves_colliding_files(tmp_path: Path) -> None:
+    """Alias normalization does not overwrite distinct conversation files."""
+    export_dir = tmp_path / "exports"
+    export_dir.mkdir()
+    first = export_dir / "Pastor Will Simpson.txt"
+    second = export_dir / "Will Junior.txt"
+    first.write_text("one")
+    second.write_text("two")
+
+    cli.apply_filename_aliases(
+        export_dir,
+        {
+            "Pastor Will Simpson": "Pastor Will",
+            "Will Junior": "Pastor Will",
+        },
+    )
+
+    renamed_files = sorted(path.name for path in export_dir.glob("*.txt"))
+    assert renamed_files == [
+        "Pastor Will [Will Junior].txt",
+        "Pastor Will.txt",
+    ]
+
+
 def test_update_history_end() -> None:
     """History stores ISO-formatted end timestamp."""
     history: dict[str, str] = {}
     end_dt = dt.datetime(2024, 1, 2, 3, 4, 5)
     cli.update_history_end(history, end_dt)
     assert history["last_end"] == "2024-01-02 03:04:05"
+
+
+def test_should_run_export_wizard_without_profile() -> None:
+    """No-arg export without a profile falls back to the wizard."""
+    args = cli.build_export_fallback_parser().parse_args([])
+    assert cli.should_run_export_wizard([], args, None) is True
+
+
+def test_should_run_export_wizard_skips_when_profile_selected() -> None:
+    """Auto-loaded profiles bypass the wizard."""
+    args = cli.build_export_fallback_parser().parse_args([])
+    profile = cli.ProfileConfig(
+        name="client-a",
+        handles=("+15551234567",),
+        names=(),
+        label="",
+        slug="",
+        platform="",
+        format="",
+        copy_method="",
+        use_caller_id=None,
+        output_dir="",
+    )
+    assert cli.should_run_export_wizard([], args, profile) is False
+
+
+def test_should_run_export_wizard_honors_explicit_flag() -> None:
+    """--wizard forces the prompt flow."""
+    args = cli.build_export_fallback_parser().parse_args(["--wizard"])
+    assert cli.should_run_export_wizard(["--wizard"], args, None) is True
 
 
 def test_list_recent_exports(tmp_path: Path) -> None:
