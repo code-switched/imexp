@@ -129,6 +129,14 @@ def test_export_parser_rejects_profile_and_filter_together() -> None:
         parser.parse_args(["--profile", "client-a", "--conversation-filter", "alice"])
 
 
+def test_export_parser_accepts_selector_flags() -> None:
+    """Selector preflight and safety mode are available on export."""
+    parser = cli.build_export_fallback_parser()
+    args = parser.parse_args(["--selector-mode", "exact", "--selector-preflight"])
+    assert args.selector_mode == "exact"
+    assert args.selector_preflight is True
+
+
 def test_load_contacts_json_empty_file(tmp_path: Path) -> None:
     """Empty contacts file yields default overrides."""
     path = tmp_path / "contacts.json"
@@ -222,11 +230,11 @@ def test_apply_filename_aliases_preserves_colliding_files(tmp_path: Path) -> Non
 
 
 def test_update_history_end() -> None:
-    """History stores ISO-formatted end timestamp."""
-    history: dict[str, str] = {}
+    """History stores epoch-millisecond end timestamps."""
+    history: dict[str, int] = {}
     end_dt = dt.datetime(2024, 1, 2, 3, 4, 5)
     cli.update_history_end(history, end_dt)
-    assert history["last_end"] == "2024-01-02 03:04:05"
+    assert history["last_end_ms"] == cli.datetime_to_epoch_ms(end_dt)
 
 
 def test_should_run_export_wizard_without_profile() -> None:

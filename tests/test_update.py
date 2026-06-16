@@ -21,11 +21,11 @@ def test_load_export_meta_empty(tmp_path: Path) -> None:
 
 def test_save_and_load_export_meta(tmp_path: Path) -> None:
     """Round-trip save/load of export metadata."""
-    meta = {"conv_filter": "test", "last_end": "2024-06-01 12:00:00"}
+    meta = {"conv_filter": "test", "last_end_ms": 1717243200000}
     cli.save_export_meta(tmp_path, meta)
     loaded = cli.load_export_meta(tmp_path)
     assert loaded["conv_filter"] == "test"
-    assert loaded["last_end"] == "2024-06-01 12:00:00"
+    assert loaded["last_end_ms"] == 1717243200000
 
 
 def test_build_export_meta() -> None:
@@ -56,12 +56,12 @@ def test_build_export_meta() -> None:
     assert meta["conv_filter"] == "alice"
     assert meta["profile"] == ""
     assert meta["platform"] == "macOS"
-    assert meta["last_end"] == "2024-06-01 12:00:00"
-    assert "updated_at" in meta
+    assert meta["last_end_ms"] == cli.datetime_to_epoch_ms(dt.datetime(2024, 6, 1, 12, 0, 0))
+    assert "updated_at_ms" in meta
 
 
 def test_merge_text_files_append(tmp_path: Path) -> None:
-    """New text is appended to an existing conversation file."""
+    """New transcript blocks are merged into an existing conversation file."""
     staging = tmp_path / "staging"
     target = tmp_path / "target"
     staging.mkdir()
@@ -73,10 +73,7 @@ def test_merge_text_files_append(tmp_path: Path) -> None:
     cli.merge_text_files(staging, target)
 
     merged = (target / "chat.txt").read_text()
-    assert "line 1" in merged
-    assert "line 2" in merged
-    assert "line 3" in merged
-    assert "line 4" in merged
+    assert merged == "line 1\nline 2\n\nline 3\nline 4\n"
 
 
 def test_merge_text_files_new_file(tmp_path: Path) -> None:
@@ -190,7 +187,10 @@ def test_resolve_update_target_no_path_returns_none(tmp_path: Path) -> None:
 
 def test_resolve_update_dates_from_meta(tmp_path: Path) -> None:
     """Update dates are resolved from export_meta.json."""
-    cli.save_export_meta(tmp_path, {"last_end": "2024-06-15 10:00:00"})
+    cli.save_export_meta(
+        tmp_path,
+        {"last_end_ms": cli.datetime_to_epoch_ms(dt.datetime(2024, 6, 15, 10, 0, 0))},
+    )
 
     class Args:
         start_date = None
@@ -207,14 +207,17 @@ def test_resolve_update_dates_from_history(tmp_path: Path) -> None:
         start_date = None
         end_date = None
 
-    history = {"last_end": "2024-03-10 08:00:00"}
+    history = {"last_end_ms": cli.datetime_to_epoch_ms(dt.datetime(2024, 3, 10, 8, 0, 0))}
     dates = cli.resolve_update_dates(Args(), tmp_path, history)
     assert cli.date_to_cli(dates.start) == "2024-03-10"
 
 
 def test_resolve_update_dates_explicit_override(tmp_path: Path) -> None:
     """CLI --start-date takes precedence over meta and history."""
-    cli.save_export_meta(tmp_path, {"last_end": "2024-06-15 10:00:00"})
+    cli.save_export_meta(
+        tmp_path,
+        {"last_end_ms": cli.datetime_to_epoch_ms(dt.datetime(2024, 6, 15, 10, 0, 0))},
+    )
 
     class Args:
         start_date = "2024-01-01"
@@ -222,6 +225,88 @@ def test_resolve_update_dates_explicit_override(tmp_path: Path) -> None:
 
     dates = cli.resolve_update_dates(Args(), tmp_path, {})
     assert cli.date_to_cli(dates.start) == "2024-01-01"
+
+
+def test_collect_inputs_cli_uses_config_start_date(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Config default start date seeds snapshot-style non-interactive exports."""
+    monkeypatch.setattr(
+        cli,
+        "resolve_platform_and_db",
+        lambda _platform, _db_path, _interactive: ("macOS", ""),
+    )
+    monkeypatch.setattr(
+        cli,
+        "resolve_conversation_filter_strict",
+        lambda conv_filter, _platform, _db_path: conv_filter,
+    )
+    args = cli.build_export_fallback_parser().parse_args([])
+    args.config_start_date = "2024-02-03"
+
+    config_run = cli.collect_inputs_cli(
+        args=args,
+        export_base=tmp_path,
+        history_path=tmp_path / "history.json",
+        contacts_path=tmp_path / "contacts.json",
+    )
+
+    assert cli.date_to_cli(config_run.dates.start) == "2024-02-03"
+
+
+def test_run_continuous_ignores_config_start_date_when_meta_exists(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Incremental updates keep using export metadata over config defaults."""
+    export_base = tmp_path / "exports"
+    target_dir = export_base / "client-a"
+    contacts_path = export_base / "contacts.json"
+    history_path = export_base / "history.json"
+    export_base.mkdir()
+    target_dir.mkdir()
+    cli.save_export_meta(
+        target_dir,
+        {"last_end_ms": cli.datetime_to_epoch_ms(dt.datetime(2024, 6, 15, 10, 0, 0))},
+    )
+
+    captured: dict[str, cli.RunConfig] = {}
+
+    def fake_run_update_export(
+        config_run: cli.RunConfig,
+        _target_dir: Path,
+        _export_base: Path,
+        _contacts_path: Path,
+        selected_profile=None,
+    ) -> None:
+        captured["config_run"] = config_run
+
+    monkeypatch.setattr(
+        cli,
+        "resolve_platform_and_db",
+        lambda _platform, _db_path, _interactive: ("macOS", ""),
+    )
+    monkeypatch.setattr(
+        cli,
+        "resolve_conversation_filter_strict",
+        lambda conv_filter, _platform, _db_path: conv_filter,
+    )
+    monkeypatch.setattr(cli, "run_update_export", fake_run_update_export)
+
+    args = cli.build_export_fallback_parser().parse_args([])
+    args.config_start_date = "2024-01-01"
+
+    cli.run_continuous(
+        args=args,
+        export_base=export_base,
+        contacts_path=contacts_path,
+        history_path=history_path,
+        history={},
+        interactive=False,
+    )
+
+    assert cli.date_to_cli(captured["config_run"].dates.start) == "2024-06-15"
 
 
 def test_resolve_update_dates_no_source_raises(tmp_path: Path) -> None:
@@ -369,7 +454,7 @@ def test_bootstrap_export_dir_uses_profile_name(tmp_path: Path) -> None:
 
 
 def test_merge_text_files_no_trailing_newline(tmp_path: Path) -> None:
-    """Appending to a file without trailing newline adds one."""
+    """Merging a file without trailing newline still produces valid spacing."""
     staging = tmp_path / "staging"
     target = tmp_path / "target"
     staging.mkdir()
@@ -381,7 +466,70 @@ def test_merge_text_files_no_trailing_newline(tmp_path: Path) -> None:
     cli.merge_text_files(staging, target)
 
     merged = (target / "chat.txt").read_text()
-    assert merged == "line 1\nline 2\n"
+    assert merged == "line 1\n\nline 2\n"
+
+
+def test_merge_text_files_dedupes_overlapping_transcript_blocks(tmp_path: Path) -> None:
+    """Overlapping transcript windows do not duplicate prior messages."""
+    staging = tmp_path / "staging"
+    target = tmp_path / "target"
+    staging.mkdir()
+    target.mkdir()
+
+    existing = (
+        "Mar 24, 2026  3:57:42 PM\n"
+        "Phlo Young\n"
+        "Following up\n\n"
+        "Mar 24, 2026  4:00:34 PM\n"
+        "Lia McBride\n"
+        "Sorry Phlo! I will add time! Back in the Uk now!!\n"
+    )
+    staged = (
+        "Mar 20, 2026  5:10:22 PM\n"
+        "Shawn swyx Wang\n"
+        "hey Lia\n\n"
+        "Mar 24, 2026  3:57:42 PM\n"
+        "Phlo Young\n"
+        "Following up\n\n"
+        "Mar 24, 2026  4:00:34 PM\n"
+        "Lia McBride\n"
+        "Sorry Phlo! I will add time! Back in the Uk now!!\n"
+    )
+    (target / "chat.txt").write_text(existing)
+    (staging / "chat.txt").write_text(staged)
+
+    cli.merge_text_files(staging, target)
+
+    merged = (target / "chat.txt").read_text()
+    assert merged.count("Mar 24, 2026  3:57:42 PM") == 1
+    assert merged.count("Mar 24, 2026  4:00:34 PM") == 1
+    assert merged.index("Mar 20, 2026  5:10:22 PM") < merged.index("Mar 24, 2026  3:57:42 PM")
+
+
+def test_merge_transcript_text_sorts_backfilled_blocks_chronologically() -> None:
+    """Backfilled staged messages are inserted by timestamp instead of appended."""
+    existing = (
+        "Apr 09, 2026  2:48:04 AM\n"
+        "Shawn swyx Wang\n"
+        "lots of space onthe left side of keynotes\n"
+    )
+    staged = (
+        "Apr 08, 2026  2:31:30 AM\n"
+        "Raouf\n"
+        "Wow what a line to get in.\n\n"
+        "Apr 09, 2026  2:48:04 AM\n"
+        "Shawn swyx Wang\n"
+        "lots of space onthe left side of keynotes\n\n"
+        "Apr 09, 2026  2:48:15 AM\n"
+        "Shawn swyx Wang\n"
+        "bring if can\n"
+    )
+
+    merged = cli.merge_transcript_text(existing, staged)
+
+    assert merged.index("Apr 08, 2026  2:31:30 AM") < merged.index("Apr 09, 2026  2:48:04 AM")
+    assert merged.index("Apr 09, 2026  2:48:04 AM") < merged.index("Apr 09, 2026  2:48:15 AM")
+    assert merged.count("Apr 09, 2026  2:48:04 AM") == 1
 
 
 def test_run_update_export_cleans_staging_on_success(

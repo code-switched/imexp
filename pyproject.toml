@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "imexp"
-version = "0.2.0"
+version = "0.3.0"
 description = "Interactive CLI wrapper for imessage-exporter with contact name resolution and post-processing"
 authors = [{name = "Code", email = "switched.code@gmail.com"}]
 readme = "README.md"

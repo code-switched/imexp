@@ -4,6 +4,27 @@ All notable changes to this project will be documented in this file.
 
 The format is based on Keep a Changelog and this project follows semantic versioning.
 
+## [0.3.0] - 2026-06-16
+
+### Added
+- Config-level `start_date` defaults for new exports and snapshots.
+- Top-level `imexp --version`.
+- Selector preflight with chat-set inspection before export.
+- Exact selector mode that blocks exports when union matching would broaden the participant set.
+
+### Changed
+- Repo-local config now lives at `data/config/imexp/config.ini`.
+- Relative export paths now resolve from the caller repository root.
+- Continuous export metadata and history now store incremental cursors as epoch milliseconds.
+- Transcript updates now merge overlapping windows chronologically instead of blindly appending.
+
+### Removed
+- Legacy string cursor storage for incremental updates.
+
+### Fixed
+- Continuous exports now ignore config `start_date` once prior export metadata exists.
+- Backfilled transcript exports no longer restart the conversation or duplicate overlapping blocks.
+
 ## [0.2.0] - 2026-04-24
 
 ### Added
@@ -34,4 +55,3 @@ The format is based on Keep a Changelog and this project follows semantic versio
 - Platform-specific wheels for macOS Apple Silicon, macOS Intel, and Windows x86_64.
 - Bundled `imessage-exporter` binaries in official wheels.
 - Trusted Publishing flow for TestPyPI and PyPI.
-

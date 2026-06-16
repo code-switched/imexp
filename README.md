@@ -6,6 +6,8 @@ An interactive CLI wrapper for [imessage-exporter](https://github.com/ReagentX/i
 
 - **Saved profiles** — define client/project presets in `config.ini` and run `imexp` with no selector
 - **Strict conversation filters** — resolve exact handles locally before calling `imessage-exporter`
+- **Selector preflight** — inspect the resolved handles and matching chats before export
+- **Exact selector mode** — refuse exports when union filtering would broaden beyond the selected participant set
 - **Interactive wizard** — run `imexp --wizard` or `imexp export --wizard` for a guided export
 - **Natural language dates** — use phrases like "last 6 months" or "2 weeks ago"
 - **Contact resolution** — automatically maps phone numbers and emails to names from your macOS or iOS Contacts database
@@ -80,7 +82,9 @@ imexp export --start-date "2024-01-01" --end-date "2024-06-01" --format txt
 Profiles let you define the handles you care about for a client or project and reuse them across
 repositories.
 
-Example `data/config/cli/config.ini`:
+Canonical example: [data/config/imexp/config.example.ini](/Users/dev/code/tools/imexp/data/config/imexp/config.example.ini)
+
+Example contents:
 
 ```ini
 [export]
@@ -114,9 +118,19 @@ Or select a profile explicitly:
 imexp export --profile client-a --start-date "last 30 days"
 ```
 
-In v1, profile handles are exact selectors for direct chats, and group-chat inclusion is
-approximate: any group containing one of the listed handles is included because upstream filtering
-is participant-union based.
+By default, selector mode is `union`: any chat containing one of the selected handles is included
+because upstream filtering is participant-union based.
+
+To make that safe for client-context exports, use:
+
+```bash
+imexp export --profile client-a --selector-preflight
+imexp export --profile client-a --selector-mode exact
+```
+
+`--selector-preflight` prints the resolved handles plus the exact chat sets that would match.
+`--selector-mode exact` refuses the export if any matched chat would bring in participants outside
+the selected handle set.
 
 Profile fields:
 
@@ -160,6 +174,8 @@ imexp relabel --export-path ./data/messages/sms/2024-01-15-10-30-00
 | `--platform` | `macOS` or `iOS` |
 | `--db-path` | Path to iOS backup or custom chat.db |
 | `--export-path` | Custom output directory |
+| `--selector-mode` | Selector safety mode: `union` or `exact` |
+| `--selector-preflight` | Print selector resolution and matching chats without exporting |
 | `--non-interactive` | Disable prompts for scripted use |
 | `-v, --verbose` | Enable debug logging |
 
@@ -175,11 +191,11 @@ imexp relabel --export-path ./data/messages/sms/2024-01-15-10-30-00
 
 ## Configuration files
 
-By default, files are stored in `./data/messages/sms/`:
+By default, repo-local files are stored under `./data/`:
 
 - `contacts.json` — custom name overrides for unknown numbers
 - `history.json` — tracks last export date
-- `cli/config.ini` — export defaults and saved profiles
+- `config/imexp/config.ini` — export defaults and saved profiles
 
 See [docs/dev/client-context.md](./docs/dev/client-context.md) for the design note behind the
 client-context workflow this tool is aiming at.

@@ -23,6 +23,7 @@ def patch_resolution_sources(
     monkeypatch: pytest.MonkeyPatch,
     handles: tuple[str, ...],
     contacts: list[cli.ContactRecord],
+    chats: tuple[cli.ChatRecord, ...] = (),
 ) -> None:
     """Patch contact and handle sources for deterministic resolution tests."""
     monkeypatch.setattr(cli, "load_message_handles", lambda _platform, _db_path: handles)
@@ -31,6 +32,7 @@ def patch_resolution_sources(
         "load_contact_records_for_platform",
         lambda _platform, _db_path: contacts,
     )
+    monkeypatch.setattr(cli, "load_chat_records", lambda _platform, _db_path: chats)
 
 
 def test_strict_filter_rewrites_exact_handle(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -139,3 +141,71 @@ def test_no_match_continuous_export_creates_no_output(
     assert list(export_base.iterdir()) == []
     assert not contacts_path.exists()
     assert not history_path.exists()
+
+
+def test_build_selector_plan_detects_broadening_chats(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Selector planning separates exact-safe chats from broadened matches."""
+    patch_resolution_sources(
+        monkeypatch,
+        handles=("+15551234567", "+15557654321", "+15559876543"),
+        contacts=[],
+        chats=(
+            cli.ChatRecord(chat_id=1, display_name="", handles=("+15551234567",)),
+            cli.ChatRecord(chat_id=2, display_name="", handles=("+15551234567", "+15557654321")),
+            cli.ChatRecord(chat_id=3, display_name="", handles=("+15551234567", "+15559876543")),
+        ),
+    )
+
+    plan = cli.build_selector_plan("(555) 123-4567, +1 555 765 4321", "macOS", None)
+
+    assert plan.resolved_handles == ("+15551234567", "+15557654321")
+    assert [chat.chat_id for chat in plan.matching_chats] == [1, 2, 3]
+    assert [chat.chat_id for chat in plan.exact_chats] == [1, 2]
+    assert [chat.chat_id for chat in plan.broadening_chats] == [3]
+
+
+def test_exact_selector_mode_rejects_broadening_chats(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Exact selector mode refuses a selector that would pull outsider participants."""
+    patch_resolution_sources(
+        monkeypatch,
+        handles=("+15551234567", "+15559876543"),
+        contacts=[],
+        chats=(
+            cli.ChatRecord(chat_id=3, display_name="Project Group", handles=("+15551234567", "+15559876543")),
+        ),
+    )
+
+    with pytest.raises(ValueError, match="would broaden beyond the requested participant set"):
+        cli.resolve_conversation_filter(
+            "(555) 123-4567",
+            "macOS",
+            None,
+            selector_mode="exact",
+        )
+
+
+def test_selector_preflight_formats_matches(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Selector preflight shows resolved handles and match counts."""
+    patch_resolution_sources(
+        monkeypatch,
+        handles=("+15551234567", "+15557654321"),
+        contacts=[],
+        chats=(
+            cli.ChatRecord(chat_id=1, display_name="Client A", handles=("+15551234567",)),
+            cli.ChatRecord(chat_id=2, display_name="", handles=("+15551234567", "+15557654321")),
+        ),
+    )
+
+    plan = cli.build_selector_plan("(555) 123-4567, +1 555 765 4321", "macOS", None)
+    rendered = cli.format_selector_preflight(plan)
+
+    assert "Resolved handles: +15551234567, +15557654321" in rendered
+    assert "Union matches: 2" in rendered
+    assert "Exact-safe matches: 2" in rendered
+    assert "- chat 1 `Client A` [+15551234567]" in rendered

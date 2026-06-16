@@ -19,12 +19,29 @@ def test_load_config_creates_default(tmp_path: Path) -> None:
     assert cfg.export.use_caller_id is True
 
 
+def test_resolve_config_path_defaults_to_repo_local_imexp_dir(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    """Default config path lives under the cwd repo's data/config/imexp directory."""
+    repo_root = tmp_path / "ops-repo"
+    repo_root.mkdir()
+    (repo_root / ".git").mkdir()
+    monkeypatch.chdir(repo_root)
+    monkeypatch.delenv("IMEXP_CONFIG_FILE", raising=False)
+    monkeypatch.delenv("IMEXP_CONFIG_DIR", raising=False)
+    monkeypatch.delenv("IMEXP_DATA_DIR", raising=False)
+
+    assert config._resolve_config_path() == repo_root / "data" / "config" / "imexp" / "config.ini"
+
+
 def test_load_config_reads_values(tmp_path: Path) -> None:
     """Config values are read from the ini file."""
     ini_path = tmp_path / "config.ini"
     ini_path.write_text(
         "[export]\n"
         "platform = macOS\n"
+        "start_date = 2024-01-01\n"
         "format = html\n"
         "copy_method = basic\n"
         "conversation_filter = alice,bob\n"
@@ -44,6 +61,7 @@ def test_load_config_reads_values(tmp_path: Path) -> None:
     )
     cfg = config.load_config(config_path=ini_path)
     assert cfg.export.platform == "macOS"
+    assert cfg.export.start_date == "2024-01-01"
     assert cfg.export.format == "html"
     assert cfg.export.copy_method == "basic"
     assert cfg.export.conversation_filter == "alice,bob"
@@ -81,7 +99,21 @@ def test_base_output_dir_from_config(tmp_path: Path) -> None:
     ini_path.write_text("[export]\noutput_dir = /custom/path\n")
     cfg = config.load_config(config_path=ini_path)
     result = config.base_output_dir(cfg)
-    assert result == Path("/custom/path")
+    assert result.as_posix().endswith("/custom/path")
+
+
+def test_base_output_dir_resolves_relative_to_repo_root(tmp_path: Path) -> None:
+    """Relative output_dir values resolve from the repo root, not the current subdir."""
+    repo_root = tmp_path / "ops-repo"
+    config_path = repo_root / "data" / "config" / "imexp" / "config.ini"
+    config_path.parent.mkdir(parents=True)
+    (repo_root / ".git").mkdir()
+    config_path.write_text("[export]\noutput_dir = ./data/messages/sms\n")
+
+    cfg = config.load_config(config_path=config_path)
+
+    assert cfg.root_dir == repo_root
+    assert config.base_output_dir(cfg) == repo_root / "data" / "messages" / "sms"
 
 
 def test_resolve_help_defaults_from_config(tmp_path: Path) -> None:
@@ -116,6 +148,7 @@ def test_apply_config_defaults_fills_missing(tmp_path: Path) -> None:
     ini_path.write_text(
         "[export]\n"
         "platform = macOS\n"
+        "start_date = 2024-01-01\n"
         "conversation_filter = lee\n"
         "use_caller_id = true\n"
     )
@@ -123,6 +156,7 @@ def test_apply_config_defaults_fills_missing(tmp_path: Path) -> None:
 
     args = argparse.Namespace(
         platform=None,
+        start_date=None,
         conversation_filter=None,
         use_caller_id=False,
         format="txt",
@@ -134,6 +168,8 @@ def test_apply_config_defaults_fills_missing(tmp_path: Path) -> None:
 
     assert profile is None
     assert args.platform == "macOS"
+    assert args.start_date is None
+    assert args.config_start_date == "2024-01-01"
     assert args.conversation_filter == "lee"
     assert args.use_caller_id is True
 
@@ -209,7 +245,7 @@ def test_apply_config_defaults_selects_default_profile(tmp_path: Path) -> None:
     assert args.format == "html"
     assert args.use_caller_id is True
     assert args.conversation_filter == "+15551234567,client@example.com"
-    assert config.base_output_dir(cfg, profile=profile) == Path("/tmp/client-a")
+    assert config.base_output_dir(cfg, profile=profile).as_posix().endswith("/tmp/client-a")
     assert cli.profile_display_label(profile) == "Client Contact"
     assert cli.profile_folder_name(profile) == "client-contact"
 
