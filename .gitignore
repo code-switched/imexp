@@ -4,6 +4,9 @@
 /data/logs
 /data/base
 /data/config/
+!/data/config/
+!/data/config/imexp/
+!/data/config/imexp/config.example.ini
 .staging/
 /src/imexp/bin/
 

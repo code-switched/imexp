@@ -82,7 +82,9 @@ imexp export --start-date "2024-01-01" --end-date "2024-06-01" --format txt
 Profiles let you define the handles you care about for a client or project and reuse them across
 repositories.
 
-Example `data/config/imexp/config.ini`:
+Canonical example: [data/config/imexp/config.example.ini](/Users/dev/code/tools/imexp/data/config/imexp/config.example.ini)
+
+Example contents:
 
 ```ini
 [export]
