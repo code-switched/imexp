@@ -93,6 +93,25 @@ class ContactRecord:
     handles: tuple[str, ...]
 
 
+@dataclass(frozen=True)
+class ChatRecord:
+    """Exact participant set for a chat in the messages database."""
+
+    chat_id: int
+    display_name: str
+    handles: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class SelectorPlan:
+    """Resolved handles and the chats they would include."""
+
+    resolved_handles: tuple[str, ...]
+    matching_chats: tuple[ChatRecord, ...]
+    exact_chats: tuple[ChatRecord, ...]
+    broadening_chats: tuple[ChatRecord, ...]
+
+
 def get_logger() -> logging.Logger:
     """Return the module logger."""
     return logging.getLogger("imexp")
@@ -528,6 +547,50 @@ def load_message_handles(platform: str | None, db_path: str | None) -> tuple[str
     return tuple(sorted(set(handles)))
 
 
+def load_chat_records(platform: str | None, db_path: str | None) -> tuple[ChatRecord, ...]:
+    """Load exact chat participant sets from the messages database."""
+    database_path = resolve_messages_db_path(platform, db_path)
+    if not database_path.exists():
+        return ()
+
+    chat_names: dict[int, str] = {}
+    chat_handles: dict[int, list[str]] = {}
+    with sqlite3.connect(database_path) as conn:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT c.ROWID, COALESCE(c.display_name, ''), h.id
+            FROM chat AS c
+            LEFT JOIN chat_handle_join AS chj ON c.ROWID = chj.chat_id
+            LEFT JOIN handle AS h ON chj.handle_id = h.ROWID
+            ORDER BY c.ROWID, h.ROWID
+            """
+        )
+        for chat_id, display_name, raw_handle in cur.fetchall():
+            chat_names[chat_id] = str(display_name or "").strip()
+            chat_handles.setdefault(chat_id, [])
+            handle = canonical_handle(str(raw_handle or ""))
+            if handle is None:
+                continue
+            chat_handles[chat_id].append(handle)
+
+    records: list[ChatRecord] = []
+    for chat_id, handles in chat_handles.items():
+        unique_handles = dedupe_strings(handles)
+        if not unique_handles:
+            continue
+        records.append(
+            ChatRecord(
+                chat_id=chat_id,
+                display_name=chat_names.get(chat_id, ""),
+                handles=tuple(sorted(unique_handles)),
+            )
+        )
+
+    records.sort(key=lambda record: record.chat_id)
+    return tuple(records)
+
+
 def build_handle_alias_index(handles: tuple[str, ...]) -> dict[str, set[str]]:
     """Map exact lookup aliases to canonical export handles."""
     index: dict[str, set[str]] = {}
@@ -629,6 +692,125 @@ def resolve_conversation_filter_strict(
         resolved_handles.extend(resolve_filter_token(token, alias_index, contact_records))
 
     return ",".join(dedupe_strings(resolved_handles))
+
+
+def resolve_selector_handles(
+    raw_filter: str,
+    platform: str | None,
+    db_path: str | None,
+) -> tuple[str, ...]:
+    """Resolve a raw selector into canonical exporter handles."""
+    resolved = resolve_conversation_filter_strict(raw_filter, platform, db_path)
+    if not resolved:
+        return ()
+    return tuple(token for token in resolved.split(",") if token)
+
+
+def chat_matches_selector(chat: ChatRecord, selected_handles: set[str]) -> bool:
+    """Return True when a chat matches any selected handle."""
+    return bool(set(chat.handles) & selected_handles)
+
+
+def chat_is_exact_selector_match(chat: ChatRecord, selected_handles: set[str]) -> bool:
+    """Return True when all chat participants stay within the selected handle set."""
+    return bool(chat.handles) and set(chat.handles).issubset(selected_handles)
+
+
+def build_selector_plan(
+    raw_filter: str,
+    platform: str | None,
+    db_path: str | None,
+) -> SelectorPlan:
+    """Resolve selector handles and model the chats they would include."""
+    resolved_handles = resolve_selector_handles(raw_filter, platform, db_path)
+    if not resolved_handles:
+        return SelectorPlan(
+            resolved_handles=(),
+            matching_chats=(),
+            exact_chats=(),
+            broadening_chats=(),
+        )
+
+    selected_handles = set(resolved_handles)
+    matching_chats: list[ChatRecord] = []
+    exact_chats: list[ChatRecord] = []
+    broadening_chats: list[ChatRecord] = []
+
+    for chat in load_chat_records(platform, db_path):
+        if not chat_matches_selector(chat, selected_handles):
+            continue
+
+        matching_chats.append(chat)
+        if chat_is_exact_selector_match(chat, selected_handles):
+            exact_chats.append(chat)
+            continue
+        broadening_chats.append(chat)
+
+    return SelectorPlan(
+        resolved_handles=resolved_handles,
+        matching_chats=tuple(matching_chats),
+        exact_chats=tuple(exact_chats),
+        broadening_chats=tuple(broadening_chats),
+    )
+
+
+def describe_chat_record(chat: ChatRecord) -> str:
+    """Format a chat record for preflight and validation output."""
+    participants = ", ".join(chat.handles)
+    if chat.display_name:
+        return f"chat {chat.chat_id} `{chat.display_name}` [{participants}]"
+    return f"chat {chat.chat_id} [{participants}]"
+
+
+def format_selector_preflight(plan: SelectorPlan) -> str:
+    """Render a selector preflight summary."""
+    if not plan.resolved_handles:
+        return "Selector preflight: no conversation selector is configured."
+
+    lines = [
+        "Selector preflight",
+        f"Resolved handles: {', '.join(plan.resolved_handles)}",
+        f"Union matches: {len(plan.matching_chats)}",
+        f"Exact-safe matches: {len(plan.exact_chats)}",
+        f"Broadening matches: {len(plan.broadening_chats)}",
+    ]
+
+    if plan.matching_chats:
+        lines.append("Matched chats:")
+        for chat in plan.matching_chats:
+            lines.append(f"- {describe_chat_record(chat)}")
+
+    return "\n".join(lines)
+
+
+def validate_selector_mode(plan: SelectorPlan, selector_mode: str) -> None:
+    """Validate the selected selector mode against planned chat matches."""
+    if selector_mode != "exact":
+        return
+    if not plan.resolved_handles:
+        raise ValueError("Exact selector mode requires --conversation-filter or --profile.")
+    if not plan.broadening_chats:
+        return
+
+    examples = "; ".join(
+        describe_chat_record(chat) for chat in plan.broadening_chats[:3]
+    )
+    raise ValueError(
+        "Exact selector mode would broaden beyond the requested participant set. "
+        f"Inspect with --selector-preflight or loosen to --selector-mode union. {examples}"
+    )
+
+
+def resolve_conversation_filter(
+    raw_filter: str,
+    platform: str | None,
+    db_path: str | None,
+    selector_mode: str = "union",
+) -> str:
+    """Resolve and validate the conversation selector for export."""
+    plan = build_selector_plan(raw_filter, platform, db_path)
+    validate_selector_mode(plan, selector_mode)
+    return ",".join(plan.resolved_handles)
 
 
 def extract_tokens_from_filename(name: str) -> set[str]:
@@ -932,6 +1114,18 @@ def add_export_args(
         default=default_bool,
         help="Create a new timestamped export instead of updating an existing one",
     )
+    parser.add_argument(
+        "--selector-mode",
+        default=default_value if not with_defaults else "union",
+        choices=["union", "exact"],
+        help="Selector safety mode",
+    )
+    parser.add_argument(
+        "--selector-preflight",
+        action="store_true",
+        default=default_bool,
+        help="Print the resolved selector and matching chats without exporting",
+    )
     parser.add_argument("-n", "--non-interactive", action="store_true", default=default_bool)
     parser.add_argument("-v", "--verbose", action="store_true", default=default_bool)
 
@@ -1085,7 +1279,7 @@ def collect_inputs_interactive(
     dates = resolve_date_range(last_end_dt)
 
     raw_filter = prompt("Conversation filter (comma-separated, enter to skip)", default="")
-    conv_filter = resolve_conversation_filter_strict(raw_filter, platform, db_path)
+    conv_filter = resolve_conversation_filter(raw_filter, platform, db_path)
     use_caller_id = yes_no("Use caller ID instead of Me", default=True)
 
     options = ExportOptions(
@@ -1117,10 +1311,11 @@ def collect_inputs_cli(
 ) -> RunConfig:
     """Collect inputs for non-interactive runs."""
     platform, db_path = resolve_platform_and_db(args.platform, args.db_path, False)
-    conv_filter = resolve_conversation_filter_strict(
+    conv_filter = resolve_conversation_filter(
         args.conversation_filter or "",
         platform,
         db_path,
+        selector_mode=getattr(args, "selector_mode", "union") or "union",
     )
     options = ExportOptions(
         platform=platform,
@@ -1648,6 +1843,18 @@ def announce_profile(profile: ProfileConfig | None) -> None:
     eprint(f"Using profile: {profile.name} ({label})")
 
 
+def run_selector_preflight(
+    args: argparse.Namespace,
+    interactive: bool,
+) -> int:
+    """Print selector resolution details without exporting."""
+    platform, db_path = resolve_platform_and_db(args.platform, args.db_path, interactive)
+    plan = build_selector_plan(args.conversation_filter or "", platform, db_path)
+    validate_selector_mode(plan, getattr(args, "selector_mode", "union") or "union")
+    print(format_selector_preflight(plan))
+    return 0
+
+
 def run_continuous(
     args: argparse.Namespace,
     export_base: Path,
@@ -1659,10 +1866,11 @@ def run_continuous(
 ) -> None:
     """Orchestrate a continuous export: update existing or bootstrap new."""
     platform, db_path = resolve_platform_and_db(args.platform, args.db_path, interactive)
-    conv_filter = resolve_conversation_filter_strict(
+    conv_filter = resolve_conversation_filter(
         args.conversation_filter or "",
         platform,
         db_path,
+        selector_mode=getattr(args, "selector_mode", "union") or "union",
     )
     args.conversation_filter = conv_filter
 
@@ -1909,6 +2117,10 @@ def main() -> int:
         explicit_options = set(vars(presence_args))
 
     selected_profile = apply_config_defaults(args, cli_config, explicit_options)
+
+    if command == "export" and getattr(args, "selector_preflight", False):
+        interactive = should_run_export_wizard(raw_export_argv, args, selected_profile)
+        return run_selector_preflight(args, interactive)
 
     export_base = config.base_output_dir(cli_config, profile=selected_profile)
     ensure_export_dir(export_base)

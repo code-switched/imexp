@@ -9,7 +9,7 @@ from dataclasses import dataclass
 logger = logging.getLogger("imexp")
 
 IOS_BACKUP_ROOT = Path("~/Library/Application Support/MobileSync/Backup").expanduser()
-CONFIG_FILE = "cli/config.ini"
+CONFIG_FILE = "imexp/config.ini"
 
 
 @dataclass(frozen=True)
@@ -49,33 +49,41 @@ class CLIConfig:
     export: ExportDefaults
     profiles: dict[str, ProfileConfig]
     path: Path
+    root_dir: Path
 
 
-def _get_project_root() -> Path:
-    """Find project root by looking for pyproject.toml or .git."""
-    current = Path(__file__).resolve()
+def _find_repo_root(start: Path) -> Path:
+    """Find a repo root from the provided starting path."""
+    current = start.resolve()
     for parent in current.parents:
         if (parent / "pyproject.toml").exists():
             return parent
         if (parent / ".git").exists():
             return parent
-    return Path.cwd()
+    return current
 
 
-def _get_data_dir() -> Path:
+def _get_project_root() -> Path:
+    """Find project root from the current working directory."""
+    return _find_repo_root(Path.cwd())
+
+
+def _get_data_dir(root_dir: Path | None = None) -> Path:
     """Get the data directory."""
     env_value = os.getenv("IMEXP_DATA_DIR")
     if env_value:
-        return Path(env_value)
-    return _get_project_root() / "data"
+        return Path(env_value).expanduser()
+
+    resolved_root = root_dir or _get_project_root()
+    return resolved_root / "data"
 
 
-def _get_config_dir() -> Path:
+def _get_config_dir(root_dir: Path | None = None) -> Path:
     """Get the config directory."""
     env_value = os.getenv("IMEXP_CONFIG_DIR")
     if env_value:
-        return Path(env_value)
-    return _get_data_dir() / "config"
+        return Path(env_value).expanduser()
+    return _get_data_dir(root_dir=root_dir) / "config"
 
 
 def _resolve_config_path(config_path: Path | None = None) -> Path:
@@ -87,7 +95,16 @@ def _resolve_config_path(config_path: Path | None = None) -> Path:
     if env_path:
         return Path(env_path).expanduser().resolve()
 
-    return _get_config_dir() / CONFIG_FILE
+    root_dir = _get_project_root()
+    return _get_config_dir(root_dir=root_dir) / CONFIG_FILE
+
+
+def _resolve_root_dir(config_path: Path | None, resolved_path: Path) -> Path:
+    """Resolve the owning repo root for the active config."""
+    if config_path is None and not os.getenv("IMEXP_CONFIG_FILE"):
+        return _get_project_root()
+
+    return _find_repo_root(resolved_path)
 
 
 def _ensure_config_file(path: Path) -> None:
@@ -189,6 +206,7 @@ def load_config(config_path: Path | None = None) -> CLIConfig:
     """Load configuration from the config.ini file."""
     parser = configparser.ConfigParser()
     resolved_path = _resolve_config_path(config_path)
+    root_dir = _resolve_root_dir(config_path, resolved_path)
     _ensure_config_file(resolved_path)
     parser.read(resolved_path)
 
@@ -208,6 +226,7 @@ def load_config(config_path: Path | None = None) -> CLIConfig:
         ),
         profiles=_load_profiles(parser),
         path=resolved_path,
+        root_dir=root_dir,
     )
 
 
@@ -217,11 +236,22 @@ def base_output_dir(
 ) -> Path:
     """Return the base output directory for exports."""
     if profile and profile.output_dir:
-        return Path(profile.output_dir)
+        profile_path = Path(profile.output_dir)
+        if profile_path.is_absolute():
+            return profile_path
+        if cli_config:
+            return cli_config.root_dir / profile_path
+        return profile_path
     if cli_config:
-        return Path(cli_config.export.output_dir)
+        output_path = Path(cli_config.export.output_dir)
+        if output_path.is_absolute():
+            return output_path
+        return cli_config.root_dir / output_path
     value = os.environ.get("IMEXP_BASE_OUTPUT_DIR", "./data/messages/sms")
-    return Path(value)
+    output_path = Path(value)
+    if output_path.is_absolute():
+        return output_path
+    return _get_project_root() / output_path
 
 
 def _default_config_template() -> str:

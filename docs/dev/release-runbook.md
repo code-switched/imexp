@@ -16,7 +16,7 @@ Use semantic versioning.
 - `minor`: new user-facing features and fixes
 - `major`: breaking changes
 
-For the current branch, the next release is `0.2.0`.
+For the current branch, the next release is `0.3.0`.
 
 ## Preflight
 
@@ -50,7 +50,7 @@ Example:
 ```bash
 git checkout main
 git pull --ff-only
-git checkout -b release-0.2.0
+git checkout -b release-0.3.0
 ```
 
 ## Release Preparation
@@ -60,7 +60,7 @@ Make the release edits:
 ```bash
 ./.venv/bin/pytest -q
 git add pyproject.toml CHANGELOG.md docs/dev/release-runbook.md
-git commit -m "build(release): prepare 0.2.0" -m "- bump the package version to 0.2.0
+git commit -m "build(release): prepare 0.3.0" -m "- bump the package version to 0.3.0
 - add release notes to the changelog
 - document the release procedure and issue-closing rules"
 ```
@@ -72,7 +72,7 @@ Open a PR from the release branch into `main`.
 Suggested title:
 
 ```text
-Release 0.2.0
+Release 0.3.0
 ```
 
 Suggested body:
@@ -138,7 +138,7 @@ After TestPyPI is green:
 Example install:
 
 ```bash
-python -m pip install --index-url https://test.pypi.org/simple/ --extra-index-url https://pypi.org/simple imexp==0.2.0
+python -m pip install --index-url https://test.pypi.org/simple/ --extra-index-url https://pypi.org/simple imexp==0.3.0
 ```
 
 ## Production Tag
@@ -148,8 +148,8 @@ After TestPyPI verification:
 ```bash
 git checkout main
 git pull --ff-only
-git tag -s v0.2.0 -m "Release v0.2.0"
-git push origin v0.2.0
+git tag -s v0.3.0 -m "Release v0.3.0"
+git push origin v0.3.0
 ```
 
 The tag push triggers the same workflow and publishes to the `pypi` environment.
@@ -161,10 +161,10 @@ After PyPI is confirmed live, create a GitHub Release.
 Example:
 
 ```bash
-gh release create v0.2.0 --title "v0.2.0" --notes-file CHANGELOG.md
+gh release create v0.3.0 --title "v0.3.0" --notes-file CHANGELOG.md
 ```
 
-If you want tighter notes, prepare a short release-note file from the `0.2.0` changelog section and use that instead.
+If you want tighter notes, prepare a short release-note file from the `0.3.0` changelog section and use that instead.
 
 ## Post-Release Verification
 
@@ -173,7 +173,7 @@ After publication:
 1. Confirm the new version is visible on PyPI.
 2. Install from real PyPI in a clean virtual environment.
 3. Confirm the expected wheel is selected on macOS and Windows.
-4. Confirm the `v0.2.0` GitHub Release exists.
+4. Confirm the `v0.3.0` GitHub Release exists.
 5. Confirm issue `#1` is closed.
 6. Confirm issue `#2` remains open.
 

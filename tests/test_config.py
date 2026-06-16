@@ -19,6 +19,22 @@ def test_load_config_creates_default(tmp_path: Path) -> None:
     assert cfg.export.use_caller_id is True
 
 
+def test_resolve_config_path_defaults_to_repo_local_imexp_dir(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    """Default config path lives under the cwd repo's data/config/imexp directory."""
+    repo_root = tmp_path / "ops-repo"
+    repo_root.mkdir()
+    (repo_root / ".git").mkdir()
+    monkeypatch.chdir(repo_root)
+    monkeypatch.delenv("IMEXP_CONFIG_FILE", raising=False)
+    monkeypatch.delenv("IMEXP_CONFIG_DIR", raising=False)
+    monkeypatch.delenv("IMEXP_DATA_DIR", raising=False)
+
+    assert config._resolve_config_path() == repo_root / "data" / "config" / "imexp" / "config.ini"
+
+
 def test_load_config_reads_values(tmp_path: Path) -> None:
     """Config values are read from the ini file."""
     ini_path = tmp_path / "config.ini"
@@ -84,6 +100,20 @@ def test_base_output_dir_from_config(tmp_path: Path) -> None:
     cfg = config.load_config(config_path=ini_path)
     result = config.base_output_dir(cfg)
     assert result == Path("/custom/path")
+
+
+def test_base_output_dir_resolves_relative_to_repo_root(tmp_path: Path) -> None:
+    """Relative output_dir values resolve from the repo root, not the current subdir."""
+    repo_root = tmp_path / "ops-repo"
+    config_path = repo_root / "data" / "config" / "imexp" / "config.ini"
+    config_path.parent.mkdir(parents=True)
+    (repo_root / ".git").mkdir()
+    config_path.write_text("[export]\noutput_dir = ./data/messages/sms\n")
+
+    cfg = config.load_config(config_path=config_path)
+
+    assert cfg.root_dir == repo_root
+    assert config.base_output_dir(cfg) == repo_root / "data" / "messages" / "sms"
 
 
 def test_resolve_help_defaults_from_config(tmp_path: Path) -> None:

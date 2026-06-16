@@ -63,6 +63,7 @@ def test_main_prints_root_version(
         ),
         profiles={},
         path=Path("/tmp/config.ini"),
+        root_dir=Path("/tmp"),
     )
     monkeypatch.setattr(cli.config, "load_config", lambda: cli_config)
     monkeypatch.setattr(cli, "get_cli_version", lambda: "0.2.1")

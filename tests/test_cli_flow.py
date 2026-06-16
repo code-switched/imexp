@@ -129,6 +129,14 @@ def test_export_parser_rejects_profile_and_filter_together() -> None:
         parser.parse_args(["--profile", "client-a", "--conversation-filter", "alice"])
 
 
+def test_export_parser_accepts_selector_flags() -> None:
+    """Selector preflight and safety mode are available on export."""
+    parser = cli.build_export_fallback_parser()
+    args = parser.parse_args(["--selector-mode", "exact", "--selector-preflight"])
+    assert args.selector_mode == "exact"
+    assert args.selector_preflight is True
+
+
 def test_load_contacts_json_empty_file(tmp_path: Path) -> None:
     """Empty contacts file yields default overrides."""
     path = tmp_path / "contacts.json"
