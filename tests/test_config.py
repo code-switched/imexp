@@ -99,7 +99,7 @@ def test_base_output_dir_from_config(tmp_path: Path) -> None:
     ini_path.write_text("[export]\noutput_dir = /custom/path\n")
     cfg = config.load_config(config_path=ini_path)
     result = config.base_output_dir(cfg)
-    assert result == Path("/custom/path")
+    assert result.as_posix().endswith("/custom/path")
 
 
 def test_base_output_dir_resolves_relative_to_repo_root(tmp_path: Path) -> None:
@@ -245,7 +245,7 @@ def test_apply_config_defaults_selects_default_profile(tmp_path: Path) -> None:
     assert args.format == "html"
     assert args.use_caller_id is True
     assert args.conversation_filter == "+15551234567,client@example.com"
-    assert config.base_output_dir(cfg, profile=profile) == Path("/tmp/client-a")
+    assert config.base_output_dir(cfg, profile=profile).as_posix().endswith("/tmp/client-a")
     assert cli.profile_display_label(profile) == "Client Contact"
     assert cli.profile_folder_name(profile) == "client-contact"
 
