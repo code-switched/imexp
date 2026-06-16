@@ -10,6 +10,7 @@ import plistlib
 import argparse
 import subprocess
 import datetime as dt
+from importlib import metadata as importlib_metadata
 from pathlib import Path
 from dataclasses import dataclass
 
@@ -28,6 +29,9 @@ CONTACTS_FILE = "contacts.json"
 HISTORY_FILE = "history.json"
 EXPORT_META_FILE = "export_meta.json"
 STAGING_DIR = ".staging"
+TRANSCRIPT_TIMESTAMP_RE = re.compile(
+    r"^(?P<stamp>[A-Z][a-z]{2} \d{2}, \d{4}\s+\d{1,2}:\d{2}:\d{2} [AP]M)"
+)
 
 
 @dataclass(frozen=True)
@@ -103,6 +107,11 @@ def configure_logging(verbose: bool) -> None:
 def eprint(msg: str) -> None:
     """Print to stderr."""
     print(msg, file=sys.stderr)
+
+
+def get_cli_version() -> str:
+    """Return the installed imexp package version."""
+    return importlib_metadata.version("imexp")
 
 
 def run(cmd: list[str]) -> None:
@@ -224,6 +233,20 @@ def load_history(history_path: Path) -> dict:
 def save_history(history_path: Path, history: dict) -> None:
     """Persist export history to disk."""
     history_path.write_text(json.dumps(history, indent=2, sort_keys=True))
+
+
+def datetime_to_epoch_ms(value: dt.datetime | None) -> int:
+    """Convert a datetime to epoch milliseconds."""
+    if value is None:
+        return 0
+    return int(value.timestamp() * 1000)
+
+
+def epoch_ms_to_datetime(value: int | None) -> dt.datetime | None:
+    """Convert epoch milliseconds to a local naive datetime."""
+    if not value:
+        return None
+    return dt.datetime.fromtimestamp(value / 1000)
 
 
 def dedupe_strings(values: list[str]) -> tuple[str, ...]:
@@ -962,6 +985,12 @@ def build_root_parser(help_defaults: HelpDefaults | None = None) -> argparse.Arg
         description="imexp CLI",
         formatter_class=ColourHelpFormatter,
     )
+    parser.add_argument(
+        "-V",
+        "--version",
+        action="store_true",
+        help="Show imexp version and exit",
+    )
     subparsers = parser.add_subparsers(dest="command")
     build_export_parser(subparsers, help_defaults=help_defaults)
     build_relabel_parser(subparsers)
@@ -1049,8 +1078,8 @@ def collect_inputs_interactive(
     history_path: Path,
 ) -> RunConfig:
     """Collect inputs for interactive runs."""
-    last_end = history.get("last_end")
-    last_end_dt = parse_date(last_end) if last_end else None
+    last_end_ms = history.get("last_end_ms")
+    last_end_dt = epoch_ms_to_datetime(last_end_ms)
 
     platform, db_path = resolve_platform_and_db(None, None, True)
     dates = resolve_date_range(last_end_dt)
@@ -1105,8 +1134,9 @@ def collect_inputs_cli(
         version=args.version,
         profile_name=args.profile or "",
     )
+    start_text = getattr(args, "start_date", None) or getattr(args, "config_start_date", "") or ""
     dates = DateRange(
-        start=parse_date(args.start_date or "") or dt.datetime.now(),
+        start=parse_date(start_text) or dt.datetime.now(),
         end=parse_date(args.end_date or "") or dt.datetime.now(),
     )
     default_dir = export_base / dt.datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
@@ -1189,8 +1219,8 @@ def ensure_export_dir(path: Path) -> None:
 
 
 def update_history_end(history: dict, end_dt: dt.datetime | None) -> None:
-    """Update history with the latest end date."""
-    history["last_end"] = end_dt.isoformat(sep=" ") if isinstance(end_dt, dt.datetime) else ""
+    """Update history with the latest end timestamp."""
+    history["last_end_ms"] = datetime_to_epoch_ms(end_dt)
 
 
 def load_export_meta(export_dir: Path) -> dict:
@@ -1216,17 +1246,68 @@ def build_export_meta(config_run: RunConfig) -> dict:
         "conv_filter": config_run.options.conv_filter,
         "profile": config_run.options.profile_name,
         "platform": config_run.options.platform or "",
-        "last_end": (
-            config_run.dates.end.isoformat(sep=" ")
-            if isinstance(config_run.dates.end, dt.datetime)
-            else ""
-        ),
-        "updated_at": dt.datetime.now().isoformat(sep=" "),
+        "last_end_ms": datetime_to_epoch_ms(config_run.dates.end),
+        "updated_at_ms": datetime_to_epoch_ms(dt.datetime.now()),
     }
 
 
+def normalize_transcript_block(block: str) -> str:
+    """Normalize a transcript block for dedupe and stable output."""
+    lines = [line.rstrip() for line in block.strip().splitlines()]
+    return "\n".join(lines).strip()
+
+
+def split_transcript_blocks(text: str) -> list[str]:
+    """Split a transcript file into normalized message blocks."""
+    stripped = text.strip()
+    if not stripped:
+        return []
+
+    blocks: list[str] = []
+    for block in re.split(r"\n\s*\n", stripped):
+        normalized = normalize_transcript_block(block)
+        if not normalized:
+            continue
+        blocks.append(normalized)
+    return blocks
+
+
+def parse_transcript_timestamp(block: str) -> dt.datetime | None:
+    """Parse the leading transcript timestamp from a normalized block."""
+    first_line = block.splitlines()[0].strip()
+    match = TRANSCRIPT_TIMESTAMP_RE.match(first_line)
+    if not match:
+        return None
+
+    stamp = re.sub(r"\s+", " ", match.group("stamp"))
+    return dt.datetime.strptime(stamp, "%b %d, %Y %I:%M:%S %p")
+
+
+def merge_transcript_text(existing_text: str, staged_text: str) -> str:
+    """Merge transcript text by deduping blocks and sorting chronologically."""
+    merged: list[tuple[dt.datetime | None, int, str]] = []
+    seen: set[str] = set()
+
+    for order, block in enumerate(
+        [*split_transcript_blocks(existing_text), *split_transcript_blocks(staged_text)]
+    ):
+        if block in seen:
+            continue
+        seen.add(block)
+        merged.append((parse_transcript_timestamp(block), order, block))
+
+    merged.sort(
+        key=lambda item: (
+            item[0] is None,
+            item[0] or dt.datetime.max,
+            item[1],
+        )
+    )
+    return "\n\n".join(block for _, _, block in merged) + "\n"
+
+
 def merge_text_files(staging_dir: Path, target_dir: Path) -> None:
-    """Append new text content from staging into target."""
+    """Merge new text content into the target transcript chronologically."""
     for staged_file in staging_dir.glob("*.txt"):
         target_file = target_dir / staged_file.name
         staged_text = staged_file.read_text(errors="ignore")
@@ -1236,10 +1317,7 @@ def merge_text_files(staging_dir: Path, target_dir: Path) -> None:
             target_file.write_text(staged_text)
             continue
         existing_text = target_file.read_text(errors="ignore")
-        with target_file.open("a") as f:
-            if existing_text and not existing_text.endswith("\n"):
-                f.write("\n")
-            f.write(staged_text)
+        target_file.write_text(merge_transcript_text(existing_text, staged_text))
 
 
 def merge_attachments(staging_dir: Path, target_dir: Path) -> int:
@@ -1508,28 +1586,31 @@ def resolve_update_dates(
     Prefers export_meta.json in the target dir, falls back to history.json,
     then to the CLI --start-date flag.
     """
-    meta = load_export_meta(target_dir)
-    meta_end = meta.get("last_end", "")
-    history_end = history.get("last_end", "")
-
     start_text = getattr(args, "start_date", None) or ""
-    if not start_text and meta_end:
-        start_text = meta_end
-    if not start_text and history_end:
-        start_text = history_end
-    if not start_text:
+    if start_text:
+        start_dt = parse_date(start_text)
+        if not start_dt:
+            raise ValueError(f"Could not parse start date: {start_text}")
+    else:
+        meta = load_export_meta(target_dir)
+        start_dt = epoch_ms_to_datetime(meta.get("last_end_ms"))
+        if start_dt is None:
+            start_dt = epoch_ms_to_datetime(history.get("last_end_ms"))
+
+    if start_dt is None:
         raise ValueError(
             "Cannot determine start date for update. "
             "Provide --start-date or ensure the target has export_meta.json."
         )
 
-    start_dt = parse_date(start_text)
-    if not start_dt:
-        raise ValueError(f"Could not parse start date: {start_text}")
-
     end_text = getattr(args, "end_date", None) or ""
     end_dt = parse_date(end_text) or dt.datetime.now()
     return DateRange(start=start_dt, end=end_dt)
+
+
+def has_incremental_cursor(meta: dict) -> bool:
+    """Return True when export metadata contains an incremental cursor."""
+    return isinstance(meta.get("last_end_ms"), int) and meta["last_end_ms"] > 0
 
 
 def default_export_dir(
@@ -1592,12 +1673,17 @@ def run_continuous(
         eprint(f"No existing export found. Creating: {target_dir}")
 
     meta = load_export_meta(target_dir)
-    has_prior = bool(meta.get("last_end"))
+    has_prior = has_incremental_cursor(meta)
 
     if has_prior:
         dates = resolve_update_dates(args, target_dir, history)
     else:
-        start_dt = parse_date(getattr(args, "start_date", None) or "") or dt.datetime.now()
+        start_text = (
+            getattr(args, "start_date", None)
+            or getattr(args, "config_start_date", "")
+            or ""
+        )
+        start_dt = parse_date(start_text) or dt.datetime.now()
         end_dt = parse_date(getattr(args, "end_date", None) or "") or dt.datetime.now()
         dates = DateRange(start=start_dt, end=end_dt)
 
@@ -1763,6 +1849,9 @@ def apply_config_defaults(
     if "copy_method" not in explicit_options and exp.copy_method:
         args.copy_method = exp.copy_method
 
+    if "start_date" not in explicit_options and exp.start_date:
+        args.config_start_date = exp.start_date
+
     selected_profile = resolve_selected_profile(args, cli_config, explicit_options)
     if selected_profile:
         apply_profile_defaults(args, selected_profile, explicit_options)
@@ -1789,7 +1878,7 @@ def should_run_export_wizard(
     return not raw_export_argv
 
 
-def main() -> None:
+def main() -> int:
     """Run the CLI entrypoint."""
     cli_config = config.load_config()
     help_defaults = resolve_help_defaults(cli_config)
@@ -1797,6 +1886,10 @@ def main() -> None:
 
     parser = build_root_parser(help_defaults=help_defaults)
     args = parser.parse_args()
+    if args.command is None and getattr(args, "version", False):
+        print(get_cli_version())
+        return 0
+
     command = args.command or "export"
     if args.command is None and len(sys.argv) > 1:
         args = parser.parse_args(["export", *sys.argv[1:]])
@@ -1858,6 +1951,7 @@ def main() -> None:
         interactive,
         selected_profile=selected_profile,
     )
+    return 0
 
 
 if __name__ == "__main__":

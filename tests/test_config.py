@@ -25,6 +25,7 @@ def test_load_config_reads_values(tmp_path: Path) -> None:
     ini_path.write_text(
         "[export]\n"
         "platform = macOS\n"
+        "start_date = 2024-01-01\n"
         "format = html\n"
         "copy_method = basic\n"
         "conversation_filter = alice,bob\n"
@@ -44,6 +45,7 @@ def test_load_config_reads_values(tmp_path: Path) -> None:
     )
     cfg = config.load_config(config_path=ini_path)
     assert cfg.export.platform == "macOS"
+    assert cfg.export.start_date == "2024-01-01"
     assert cfg.export.format == "html"
     assert cfg.export.copy_method == "basic"
     assert cfg.export.conversation_filter == "alice,bob"
@@ -116,6 +118,7 @@ def test_apply_config_defaults_fills_missing(tmp_path: Path) -> None:
     ini_path.write_text(
         "[export]\n"
         "platform = macOS\n"
+        "start_date = 2024-01-01\n"
         "conversation_filter = lee\n"
         "use_caller_id = true\n"
     )
@@ -123,6 +126,7 @@ def test_apply_config_defaults_fills_missing(tmp_path: Path) -> None:
 
     args = argparse.Namespace(
         platform=None,
+        start_date=None,
         conversation_filter=None,
         use_caller_id=False,
         format="txt",
@@ -134,6 +138,8 @@ def test_apply_config_defaults_fills_missing(tmp_path: Path) -> None:
 
     assert profile is None
     assert args.platform == "macOS"
+    assert args.start_date is None
+    assert args.config_start_date == "2024-01-01"
     assert args.conversation_filter == "lee"
     assert args.use_caller_id is True
 

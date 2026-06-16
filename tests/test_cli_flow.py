@@ -222,11 +222,11 @@ def test_apply_filename_aliases_preserves_colliding_files(tmp_path: Path) -> Non
 
 
 def test_update_history_end() -> None:
-    """History stores ISO-formatted end timestamp."""
-    history: dict[str, str] = {}
+    """History stores epoch-millisecond end timestamps."""
+    history: dict[str, int] = {}
     end_dt = dt.datetime(2024, 1, 2, 3, 4, 5)
     cli.update_history_end(history, end_dt)
-    assert history["last_end"] == "2024-01-02 03:04:05"
+    assert history["last_end_ms"] == cli.datetime_to_epoch_ms(end_dt)
 
 
 def test_should_run_export_wizard_without_profile() -> None:

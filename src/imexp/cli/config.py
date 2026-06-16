@@ -19,6 +19,7 @@ class ExportDefaults:
     platform: str
     format: str
     copy_method: str
+    start_date: str
     conversation_filter: str
     default_profile: str
     use_caller_id: bool
@@ -199,6 +200,7 @@ def load_config(config_path: Path | None = None) -> CLIConfig:
             platform=_get_value(parser, "export", "platform") or "",
             format=_get_value(parser, "export", "format") or "txt",
             copy_method=_get_value(parser, "export", "copy_method") or "full",
+            start_date=_get_value(parser, "export", "start_date") or "",
             conversation_filter=_get_value(parser, "export", "conversation_filter") or "",
             default_profile=_get_value(parser, "export", "default_profile") or "",
             use_caller_id=_get_bool_value(parser, "export", "use_caller_id") or False,
@@ -238,6 +240,10 @@ format = txt
 # Attachment copy method.
 # Options: disabled, clone, basic, full
 copy_method = full
+
+# Default start date for new exports and snapshots.
+# Leave empty to start from the CLI value, export metadata, history, or now.
+start_date =
 
 # Default conversation filter (comma-separated).
 # This is the filter passed to imessage-exporter --conversation-filter.
