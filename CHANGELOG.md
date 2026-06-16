@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on Keep a Changelog and this project follows semantic versioning.
 
+## [0.3.1] - 2026-06-16
+
+### Fixed
+- Pin `tzlocal==5.3.1` to avoid the broken `5.4.2` wheel that causes `imexp` to crash on import in a clean install.
+- Restore clean TestPyPI installs for the CLI smoke-test path.
+
 ## [0.3.0] - 2026-06-16
 
 ### Added
