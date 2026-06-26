@@ -4,6 +4,20 @@ All notable changes to this project will be documented in this file.
 
 The format is based on Keep a Changelog and this project follows semantic versioning.
 
+## [0.4.0] - 2026-06-26
+
+### Added
+- Profile-level `self_label` and `self_aliases` settings so exports can normalize the local sender name after caller-ID rewrites.
+- Profile-level `filename_aliases = false` to keep participant-based transcript filenames when a profile label should not replace them.
+
+### Changed
+- Continuous export metadata and history now upgrade legacy string timestamps to canonical epoch-millisecond cursors on read and write.
+
+### Fixed
+- Continuous exports now reuse existing profile transcript files when filename alias rules change, instead of forking parallel `AIE...` transcripts.
+- Incremental updates now honor legacy `last_end` metadata instead of falling back to the configured start date and re-exporting old conversations.
+- Post-processed transcript text can now normalize inconsistent local sender labels such as `Me`, caller-ID names, and custom aliases.
+
 ## [0.3.1] - 2026-06-16
 
 ### Fixed
