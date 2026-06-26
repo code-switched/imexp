@@ -178,6 +178,30 @@ def test_postprocess_exports(tmp_path: Path) -> None:
     assert "Bob" in renamed_files[0].read_text()
 
 
+def test_postprocess_exports_applies_text_only_replacements(tmp_path: Path) -> None:
+    """Profile-local sender aliases rewrite transcript content without renaming files."""
+    export_dir = tmp_path / "exports"
+    export_dir.mkdir()
+    file_path = export_dir / "chat.txt"
+    file_path.write_text("Me\nPhlo Young\n")
+
+    cli.postprocess_exports(
+        cli.PostprocessContext(
+            export_dir=export_dir,
+            contacts_map={},
+            overrides={},
+            text_replacements={
+                "Me": "Christopher Smith",
+                "Phlo Young": "Christopher Smith",
+            },
+        ),
+        ask_for_missing=False,
+    )
+
+    assert file_path.read_text() == "Christopher Smith\nChristopher Smith\n"
+    assert file_path.name == "chat.txt"
+
+
 def test_build_profile_filename_aliases_uses_contacts_and_names() -> None:
     """Profile aliases combine handle-derived contact names and explicit names."""
     profile = cli.ProfileConfig(
@@ -203,6 +227,55 @@ def test_build_profile_filename_aliases_uses_contacts_and_names() -> None:
 
     assert aliases["Pastor Will Simpson"] == "Pastor Will"
     assert aliases["Will Junior"] == "Pastor Will"
+
+
+def test_build_profile_text_replacements_uses_self_label_and_aliases() -> None:
+    """Profile self-label settings normalize local sender names."""
+    profile = cli.ProfileConfig(
+        name="pastor-will",
+        handles=(),
+        names=(),
+        label="Pastor Will",
+        slug="pastor-will",
+        platform="",
+        format="",
+        copy_method="",
+        use_caller_id=None,
+        output_dir="",
+        self_label="Christopher Smith",
+        self_aliases=("Phlo Young",),
+    )
+
+    replacements = cli.build_profile_text_replacements(profile)
+
+    assert replacements == {
+        "Me": "Christopher Smith",
+        "Phlo Young": "Christopher Smith",
+    }
+
+
+def test_build_profile_filename_aliases_can_be_disabled() -> None:
+    """Profiles can opt out of filename alias normalization."""
+    profile = cli.ProfileConfig(
+        name="pastor-will",
+        handles=("+19049885338",),
+        names=("Will Junior",),
+        label="Pastor Will",
+        slug="pastor-will",
+        platform="",
+        format="",
+        copy_method="",
+        use_caller_id=None,
+        output_dir="",
+        filename_aliases=False,
+    )
+
+    aliases = cli.build_profile_filename_aliases(
+        profile,
+        {"+19049885338": "Pastor Will Simpson"},
+    )
+
+    assert aliases == {}
 
 
 def test_apply_filename_aliases_preserves_colliding_files(tmp_path: Path) -> None:

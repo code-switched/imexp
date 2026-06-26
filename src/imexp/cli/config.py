@@ -40,6 +40,9 @@ class ProfileConfig:
     copy_method: str
     use_caller_id: bool | None
     output_dir: str
+    self_label: str = ""
+    self_aliases: tuple[str, ...] = ()
+    filename_aliases: bool = True
 
 
 @dataclass(frozen=True)
@@ -193,11 +196,15 @@ def _load_profiles(parser: configparser.ConfigParser) -> dict[str, ProfileConfig
             names=_get_list_value(parser, section, "names"),
             label=_get_value(parser, section, "label") or "",
             slug=_get_value(parser, section, "slug") or "",
+            self_label=_get_value(parser, section, "self_label") or "",
+            self_aliases=_get_list_value(parser, section, "self_aliases"),
             platform=_get_value(parser, section, "platform") or "",
             format=_get_value(parser, section, "format") or "",
             copy_method=_get_value(parser, section, "copy_method") or "",
             use_caller_id=_get_bool_value(parser, section, "use_caller_id"),
             output_dir=_get_value(parser, section, "output_dir") or "",
+            filename_aliases=_get_bool_value(parser, section, "filename_aliases")
+            is not False,
         )
     return profiles
 
@@ -301,6 +308,11 @@ output_dir = ./data/messages/sms
 #     Alternate Contact Label
 # label = Client Contact
 # slug = client-contact
+# self_label = My Canonical Name
+# self_aliases =
+#     Me
+#     Old Caller ID Name
+# filename_aliases = true
 # platform = macOS
 # format = txt
 # copy_method = full

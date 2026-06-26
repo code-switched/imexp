@@ -12,7 +12,7 @@ import subprocess
 import datetime as dt
 from importlib import metadata as importlib_metadata
 from pathlib import Path
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import dateparser
 
@@ -83,6 +83,7 @@ class PostprocessContext:
     export_dir: Path
     contacts_map: dict[str, str]
     overrides: dict[str, str]
+    text_replacements: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -246,12 +247,14 @@ def load_history(history_path: Path) -> dict:
     contents = history_path.read_text()
     if not contents.strip():
         return {}
-    return json.loads(contents)
+    return normalize_persisted_dates(json.loads(contents))
 
 
 def save_history(history_path: Path, history: dict) -> None:
     """Persist export history to disk."""
-    history_path.write_text(json.dumps(history, indent=2, sort_keys=True))
+    canonical = normalize_persisted_dates(history)
+    canonical.pop("last_end", None)
+    history_path.write_text(json.dumps(canonical, indent=2, sort_keys=True))
 
 
 def datetime_to_epoch_ms(value: dt.datetime | None) -> int:
@@ -266,6 +269,41 @@ def epoch_ms_to_datetime(value: int | None) -> dt.datetime | None:
     if not value:
         return None
     return dt.datetime.fromtimestamp(value / 1000)
+
+
+def parse_persisted_datetime(value: object) -> dt.datetime | None:
+    """Parse a persisted datetime string into a local naive datetime."""
+    if not isinstance(value, str):
+        return None
+    stripped = value.strip()
+    if not stripped:
+        return None
+
+    try:
+        return dt.datetime.fromisoformat(stripped)
+    except ValueError:
+        return parse_date(stripped)
+
+
+def normalize_persisted_dates(data: dict) -> dict:
+    """Upgrade persisted timestamp fields to the canonical millisecond form."""
+    if not isinstance(data, dict):
+        return {}
+
+    normalized = dict(data)
+    last_end_ms = normalized.get("last_end_ms")
+    if not isinstance(last_end_ms, int) or last_end_ms <= 0:
+        legacy_last_end = parse_persisted_datetime(normalized.get("last_end"))
+        if legacy_last_end is not None:
+            normalized["last_end_ms"] = datetime_to_epoch_ms(legacy_last_end)
+
+    updated_at_ms = normalized.get("updated_at_ms")
+    if not isinstance(updated_at_ms, int) or updated_at_ms <= 0:
+        legacy_updated_at = parse_persisted_datetime(normalized.get("updated_at"))
+        if legacy_updated_at is not None:
+            normalized["updated_at_ms"] = datetime_to_epoch_ms(legacy_updated_at)
+
+    return normalized
 
 
 def dedupe_strings(values: list[str]) -> tuple[str, ...]:
@@ -862,7 +900,11 @@ def postprocess_exports(context: PostprocessContext, ask_for_missing: bool = Tru
     unknown_tokens = set()
     for file_path in txt_files:
         unknown_tokens |= extract_tokens_from_filename(file_path.name)
-    known_keys = set(context.contacts_map.keys()) | set(context.overrides.keys())
+    known_keys = (
+        set(context.contacts_map.keys())
+        | set(context.overrides.keys())
+        | set(context.text_replacements.keys())
+    )
     if ask_for_missing:
         for token in sorted(unknown_tokens):
             if token in known_keys:
@@ -873,6 +915,7 @@ def postprocess_exports(context: PostprocessContext, ask_for_missing: bool = Tru
                     context.overrides[token] = name
 
     replacements = build_replacements(context.overrides, context.contacts_map)
+    replacements.update(context.text_replacements)
     if not replacements:
         return
 
@@ -897,6 +940,8 @@ def build_profile_filename_aliases(
 ) -> dict[str, str]:
     """Build filename-only display aliases for the selected profile."""
     if profile is None:
+        return {}
+    if not profile.filename_aliases:
         return {}
 
     target = profile_display_label(profile).strip()
@@ -923,6 +968,26 @@ def build_profile_filename_aliases(
             continue
         aliases[stripped] = target
 
+    return aliases
+
+
+def build_profile_text_replacements(profile: ProfileConfig | None) -> dict[str, str]:
+    """Build transcript-only replacements for the local sender label."""
+    if profile is None:
+        return {}
+
+    target = profile.self_label.strip()
+    if not target:
+        return {}
+
+    aliases: dict[str, str] = {"Me": target}
+    for alias in profile.self_aliases:
+        stripped = alias.strip()
+        if not stripped:
+            continue
+        if stripped.casefold() == target.casefold():
+            continue
+        aliases[stripped] = target
     return aliases
 
 
@@ -1426,13 +1491,16 @@ def load_export_meta(export_dir: Path) -> dict:
     contents = meta_path.read_text()
     if not contents.strip():
         return {}
-    return json.loads(contents)
+    return normalize_persisted_dates(json.loads(contents))
 
 
 def save_export_meta(export_dir: Path, meta: dict) -> None:
     """Persist per-export metadata to an export directory."""
     meta_path = export_dir / EXPORT_META_FILE
-    meta_path.write_text(json.dumps(meta, indent=2, sort_keys=True))
+    canonical = normalize_persisted_dates(meta)
+    canonical.pop("last_end", None)
+    canonical.pop("updated_at", None)
+    meta_path.write_text(json.dumps(canonical, indent=2, sort_keys=True))
 
 
 def build_export_meta(config_run: RunConfig) -> dict:
@@ -1667,13 +1735,13 @@ def run_update_export(
                 export_dir=staging_dir,
                 contacts_map=contacts_map,
                 overrides=overrides,
+                text_replacements=build_profile_text_replacements(selected_profile),
             ),
             ask_for_missing=False,
         )
-        apply_filename_aliases(
-            staging_dir,
-            build_profile_filename_aliases(selected_profile, contacts_map),
-        )
+        filename_aliases = build_profile_filename_aliases(selected_profile, contacts_map)
+        apply_filename_aliases(staging_dir, filename_aliases)
+        apply_filename_aliases(target_dir, filename_aliases)
         contacts_json["overrides"] = overrides
         save_contacts_json(contacts_path, contacts_json)
 
@@ -1971,6 +2039,7 @@ def run_snapshot(
             export_dir=config_run.paths.export_path,
             contacts_map=contacts_map,
             overrides=overrides,
+            text_replacements=build_profile_text_replacements(selected_profile),
         ),
         ask_for_missing=interactive,
     )
