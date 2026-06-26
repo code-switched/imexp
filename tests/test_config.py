@@ -57,6 +57,11 @@ def test_load_config_reads_values(tmp_path: Path) -> None:
         "    Client Contact\n"
         "label = Client Contact\n"
         "slug = client-contact\n"
+        "self_label = Christopher Smith\n"
+        "self_aliases =\n"
+        "    Me\n"
+        "    Phlo Young\n"
+        "filename_aliases = false\n"
         "copy_method = clone\n"
     )
     cfg = config.load_config(config_path=ini_path)
@@ -72,6 +77,9 @@ def test_load_config_reads_values(tmp_path: Path) -> None:
     assert cfg.profiles["client-a"].names == ("Client Contact",)
     assert cfg.profiles["client-a"].label == "Client Contact"
     assert cfg.profiles["client-a"].slug == "client-contact"
+    assert cfg.profiles["client-a"].self_label == "Christopher Smith"
+    assert cfg.profiles["client-a"].self_aliases == ("Me", "Phlo Young")
+    assert cfg.profiles["client-a"].filename_aliases is False
     assert cfg.profiles["client-a"].copy_method == "clone"
 
 

@@ -16,7 +16,7 @@ Use semantic versioning.
 - `minor`: new user-facing features and fixes
 - `major`: breaking changes
 
-For the current branch, the next release is `0.3.0`.
+Replace the example version below with the version you are preparing.
 
 ## Preflight
 

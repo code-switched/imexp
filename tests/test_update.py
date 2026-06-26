@@ -19,6 +19,22 @@ def test_load_export_meta_empty(tmp_path: Path) -> None:
     assert cli.load_export_meta(tmp_path) == {}
 
 
+def test_load_export_meta_normalizes_legacy_datetime_fields(tmp_path: Path) -> None:
+    """Legacy string timestamps are upgraded to canonical millisecond fields."""
+    (tmp_path / cli.EXPORT_META_FILE).write_text(
+        '{"last_end": "2026-06-08 03:36:16.384176", "updated_at": "2026-06-08 03:36:26.297389"}'
+    )
+
+    meta = cli.load_export_meta(tmp_path)
+
+    assert meta["last_end_ms"] == cli.datetime_to_epoch_ms(
+        dt.datetime(2026, 6, 8, 3, 36, 16, 384176)
+    )
+    assert meta["updated_at_ms"] == cli.datetime_to_epoch_ms(
+        dt.datetime(2026, 6, 8, 3, 36, 26, 297389)
+    )
+
+
 def test_save_and_load_export_meta(tmp_path: Path) -> None:
     """Round-trip save/load of export metadata."""
     meta = {"conv_filter": "test", "last_end_ms": 1717243200000}
@@ -210,6 +226,18 @@ def test_resolve_update_dates_from_history(tmp_path: Path) -> None:
     history = {"last_end_ms": cli.datetime_to_epoch_ms(dt.datetime(2024, 3, 10, 8, 0, 0))}
     dates = cli.resolve_update_dates(Args(), tmp_path, history)
     assert cli.date_to_cli(dates.start) == "2024-03-10"
+
+
+def test_load_history_normalizes_legacy_last_end(tmp_path: Path) -> None:
+    """Legacy history timestamps are upgraded on read."""
+    history_path = tmp_path / "history.json"
+    history_path.write_text('{"last_end": "2026-06-08 03:36:16.384176"}')
+
+    history = cli.load_history(history_path)
+
+    assert history["last_end_ms"] == cli.datetime_to_epoch_ms(
+        dt.datetime(2026, 6, 8, 3, 36, 16, 384176)
+    )
 
 
 def test_resolve_update_dates_explicit_override(tmp_path: Path) -> None:
@@ -580,6 +608,83 @@ def test_run_update_export_cleans_staging_on_success(
 
     assert not (export_base / cli.STAGING_DIR).exists()
     assert (target_dir / "chat.txt").exists()
+
+
+def test_run_update_export_normalizes_target_filenames_before_merge(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Profile aliasing is applied to the existing target before merge."""
+    export_base = tmp_path / "exports"
+    target_dir = export_base / "aie"
+    contacts_path = export_base / "contacts.json"
+    history_path = export_base / "history.json"
+    export_base.mkdir()
+    target_dir.mkdir()
+    (target_dir / "Shawn swyx Wang.txt").write_text(
+        "Mar 24, 2026  3:57:42 PM\n"
+        "Shawn swyx Wang\n"
+        "hello\n"
+    )
+
+    def fake_run_exporter(config_run: cli.RunConfig) -> None:
+        config_run.paths.export_path.mkdir(parents=True, exist_ok=True)
+        (config_run.paths.export_path / "Shawn swyx Wang.txt").write_text(
+            "Mar 24, 2026  4:00:34 PM\n"
+            "Shawn swyx Wang\n"
+            "world\n"
+        )
+
+    monkeypatch.setattr(cli, "run_exporter", fake_run_exporter)
+    monkeypatch.setattr(cli, "load_contacts_for_platform", lambda _platform, _db_path: {})
+
+    config_run = cli.RunConfig(
+        options=cli.ExportOptions(
+            platform="macOS",
+            db_path="",
+            conv_filter="shawn",
+            use_caller_id=True,
+            copy_method="full",
+            output_format="txt",
+            diagnostics=False,
+            no_lazy=False,
+            version=False,
+            profile_name="aie",
+        ),
+        dates=cli.DateRange(start=dt.datetime(2024, 1, 1), end=dt.datetime(2024, 1, 2)),
+        paths=cli.PathsConfig(
+            export_path=target_dir,
+            contacts_json=contacts_path,
+            history_json=history_path,
+        ),
+    )
+    profile = cli.ProfileConfig(
+        name="aie",
+        handles=("Shawn swyx Wang",),
+        names=(),
+        label="AIE",
+        slug="aie",
+        platform="",
+        format="",
+        copy_method="",
+        use_caller_id=None,
+        output_dir="",
+    )
+
+    cli.run_update_export(
+        config_run,
+        target_dir,
+        export_base,
+        contacts_path,
+        selected_profile=profile,
+    )
+
+    assert not (target_dir / "Shawn swyx Wang.txt").exists()
+    merged_path = target_dir / "AIE.txt"
+    assert merged_path.exists()
+    merged = merged_path.read_text()
+    assert "hello" in merged
+    assert "world" in merged
 
 
 def test_run_update_export_preserves_failed_staging(
