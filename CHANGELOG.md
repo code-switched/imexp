@@ -4,7 +4,7 @@ All notable changes to this project will be documented in this file.
 
 The format is based on Keep a Changelog and this project follows semantic versioning.
 
-## [Unreleased]
+## [0.6.1] - 2026-07-28
 
 ### Fixed
 - Continuous profile exports now apply configured sender aliases to the merged transcript set, so an explicit `relabel` run is not required after export.
