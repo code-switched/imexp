@@ -244,7 +244,7 @@ def load_history(history_path: Path) -> dict:
     """Load export history from disk."""
     if not history_path.exists():
         return {}
-    contents = history_path.read_text()
+    contents = history_path.read_text(encoding="utf-8")
     if not contents.strip():
         return {}
     return normalize_persisted_dates(json.loads(contents))
@@ -254,7 +254,10 @@ def save_history(history_path: Path, history: dict) -> None:
     """Persist export history to disk."""
     canonical = normalize_persisted_dates(history)
     canonical.pop("last_end", None)
-    history_path.write_text(json.dumps(canonical, indent=2, sort_keys=True))
+    history_path.write_text(
+        json.dumps(canonical, indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
 
 
 def datetime_to_epoch_ms(value: dt.datetime | None) -> int:
@@ -524,7 +527,7 @@ def load_contacts_json(path: Path) -> dict:
     """Load persisted overrides from JSON."""
     if not path.exists():
         return {"overrides": {}}
-    contents = path.read_text()
+    contents = path.read_text(encoding="utf-8")
     if not contents.strip():
         return {"overrides": {}}
     return json.loads(contents)
@@ -532,7 +535,10 @@ def load_contacts_json(path: Path) -> dict:
 
 def save_contacts_json(path: Path, data: dict) -> None:
     """Persist overrides to JSON."""
-    path.write_text(json.dumps(data, indent=2, sort_keys=True))
+    path.write_text(
+        json.dumps(data, indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
 
 
 def load_contact_records_for_platform(
@@ -932,10 +938,10 @@ def postprocess_exports(context: PostprocessContext, ask_for_missing: bool = Tru
 
     keys = sorted(replacements.keys(), key=len, reverse=True)
     for file_path in txt_files:
-        text = file_path.read_text(errors="ignore")
+        text = file_path.read_text(encoding="utf-8", errors="ignore")
         for key in keys:
             text = replace_in_text(text, key, replacements[key])
-        file_path.write_text(text)
+        file_path.write_text(text, encoding="utf-8")
 
     for file_path in txt_files:
         new_name = file_path.name
@@ -1503,7 +1509,7 @@ def load_export_meta(export_dir: Path) -> dict:
     meta_path = export_dir / EXPORT_META_FILE
     if not meta_path.exists():
         return {}
-    contents = meta_path.read_text()
+    contents = meta_path.read_text(encoding="utf-8")
     if not contents.strip():
         return {}
     return normalize_persisted_dates(json.loads(contents))
@@ -1515,7 +1521,10 @@ def save_export_meta(export_dir: Path, meta: dict) -> None:
     canonical = normalize_persisted_dates(meta)
     canonical.pop("last_end", None)
     canonical.pop("updated_at", None)
-    meta_path.write_text(json.dumps(canonical, indent=2, sort_keys=True))
+    meta_path.write_text(
+        json.dumps(canonical, indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
 
 
 def build_export_meta(config_run: RunConfig) -> dict:
@@ -1588,14 +1597,17 @@ def merge_text_files(staging_dir: Path, target_dir: Path) -> None:
     """Merge new text content into the target transcript chronologically."""
     for staged_file in staging_dir.glob("*.txt"):
         target_file = target_dir / staged_file.name
-        staged_text = staged_file.read_text(errors="ignore")
+        staged_text = staged_file.read_text(encoding="utf-8", errors="ignore")
         if not staged_text.strip():
             continue
         if not target_file.exists():
-            target_file.write_text(staged_text)
+            target_file.write_text(staged_text, encoding="utf-8")
             continue
-        existing_text = target_file.read_text(errors="ignore")
-        target_file.write_text(merge_transcript_text(existing_text, staged_text))
+        existing_text = target_file.read_text(encoding="utf-8", errors="ignore")
+        target_file.write_text(
+            merge_transcript_text(existing_text, staged_text),
+            encoding="utf-8",
+        )
 
 
 def merge_attachments(staging_dir: Path, target_dir: Path) -> int:

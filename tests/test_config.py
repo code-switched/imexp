@@ -83,6 +83,24 @@ def test_load_config_reads_values(tmp_path: Path) -> None:
     assert cfg.profiles["client-a"].copy_method == "clone"
 
 
+def test_load_config_reads_unicode_self_aliases(tmp_path: Path) -> None:
+    """Profile aliases are loaded as UTF-8 text."""
+    ini_path = tmp_path / "config.ini"
+    ini_path.write_text(
+        "[profile.crc-team]\n"
+        "handles =\n"
+        "    +15551234567\n"
+        "self_label = Chris Smith\n"
+        "self_aliases =\n"
+        "    💙 Christopher Smith 🧑🏾‍💻\n",
+        encoding="utf-8",
+    )
+
+    cfg = config.load_config(config_path=ini_path)
+
+    assert cfg.profiles["crc-team"].self_aliases == ("💙 Christopher Smith 🧑🏾‍💻",)
+
+
 def test_load_config_empty_values_use_defaults(tmp_path: Path) -> None:
     """Empty ini values fall back to hardcoded defaults."""
     ini_path = tmp_path / "config.ini"

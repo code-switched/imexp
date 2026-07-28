@@ -158,7 +158,10 @@ def test_run_relabel_applies_profile_text_and_filename_aliases(
     export_dir = export_base / "archive"
     export_dir.mkdir(parents=True)
     file_path = export_dir / "chat_Archive Label.txt"
-    file_path.write_text("Merrita Media Meeting 💙 Christopher Smith 🧑🏾‍💻\n")
+    file_path.write_text(
+        "Merrita Media Meeting 💙 Christopher Smith 🧑🏾‍💻\n",
+        encoding="utf-8",
+    )
     profile = build_profile("crc-team")
     cli_config = build_cli_config(tmp_path, {profile.name: profile})
     args = cli.argparse.Namespace(
