@@ -687,6 +687,87 @@ def test_run_update_export_normalizes_target_filenames_before_merge(
     assert "world" in merged
 
 
+def test_run_update_export_normalizes_existing_profile_sender_aliases(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Continuous exports repair configured sender aliases in merged transcripts."""
+    export_base = tmp_path / "exports"
+    target_dir = export_base / "crc-team"
+    contacts_path = export_base / "contacts.json"
+    history_path = export_base / "history.json"
+    export_base.mkdir()
+    target_dir.mkdir()
+    alias = "💙 Christopher Smith 🧑🏾‍💻"
+    (target_dir / "Doctor Cheryl Perry.txt").write_text(
+        "Jan 15, 2026 10:02:42 PM\n"
+        f"{alias}\n"
+        "existing message\n",
+        encoding="utf-8",
+    )
+
+    def fake_run_exporter(config_run: cli.RunConfig) -> None:
+        config_run.paths.export_path.mkdir(parents=True, exist_ok=True)
+        (config_run.paths.export_path / "Doctor Cheryl Perry.txt").write_text(
+            "Jan 16, 2026 10:02:42 PM\n"
+            f"{alias}\n"
+            "new message\n",
+            encoding="utf-8",
+        )
+
+    monkeypatch.setattr(cli, "run_exporter", fake_run_exporter)
+    monkeypatch.setattr(cli, "load_contacts_for_platform", lambda _platform, _db_path: {})
+
+    config_run = cli.RunConfig(
+        options=cli.ExportOptions(
+            platform="macOS",
+            db_path="",
+            conv_filter="cheryl",
+            use_caller_id=True,
+            copy_method="full",
+            output_format="txt",
+            diagnostics=False,
+            no_lazy=False,
+            version=False,
+            profile_name="crc-team",
+        ),
+        dates=cli.DateRange(start=dt.datetime(2026, 1, 1), end=dt.datetime(2026, 1, 17)),
+        paths=cli.PathsConfig(
+            export_path=target_dir,
+            contacts_json=contacts_path,
+            history_json=history_path,
+        ),
+    )
+    profile = cli.ProfileConfig(
+        name="crc-team",
+        handles=("+18503753520",),
+        names=(),
+        label="CRC Team",
+        slug="crc-team",
+        platform="",
+        format="",
+        copy_method="",
+        use_caller_id=None,
+        output_dir="",
+        self_label="Chris Smith",
+        self_aliases=(alias,),
+    )
+
+    cli.run_update_export(
+        config_run,
+        target_dir,
+        export_base,
+        contacts_path,
+        selected_profile=profile,
+    )
+
+    transcript = (target_dir / "Doctor Cheryl Perry.txt").read_text(encoding="utf-8")
+    assert alias not in transcript
+    assert transcript.count("Chris Smith") == 2
+    assert "existing message" in transcript
+    assert "new message" in transcript
+
+
 def test_run_update_export_preserves_failed_staging(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

@@ -167,6 +167,10 @@ imexp relabel --export-path ./data/messages/sms/2024-01-15-10-30-00
 To also apply saved sender and filename aliases, pass `--profile`. Otherwise, relabel uses the
 profile recorded in the export metadata before falling back to the configured default profile.
 
+A selected profile applies its `self_aliases` automatically during each continuous `imexp` export,
+including existing transcripts after they are merged. Use `relabel` to apply aliases without
+running an export.
+
 ```bash
 imexp relabel --profile client-a --export-path ./data/messages/sms/2024-01-15-10-30-00
 ```

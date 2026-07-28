@@ -1008,6 +1008,25 @@ def build_profile_text_replacements(profile: ProfileConfig | None) -> dict[str, 
     return aliases
 
 
+def apply_profile_text_replacements(
+    export_dir: Path,
+    text_replacements: dict[str, str],
+) -> None:
+    """Apply sender aliases to every transcript in an export directory."""
+    if not text_replacements:
+        return
+
+    postprocess_exports(
+        PostprocessContext(
+            export_dir=export_dir,
+            contacts_map={},
+            overrides={},
+            text_replacements=text_replacements,
+        ),
+        ask_for_missing=False,
+    )
+
+
 def unique_renamed_path(file_path: Path, desired_name: str) -> Path:
     """Return a collision-safe target path for a renamed export file."""
     desired = file_path.with_name(desired_name)
@@ -1757,12 +1776,13 @@ def run_update_export(
         contacts_map = load_contacts_for_platform(
             config_run.options.platform, config_run.options.db_path
         )
+        text_replacements = build_profile_text_replacements(selected_profile)
         postprocess_exports(
             PostprocessContext(
                 export_dir=staging_dir,
                 contacts_map=contacts_map,
                 overrides=overrides,
-                text_replacements=build_profile_text_replacements(selected_profile),
+                text_replacements=text_replacements,
             ),
             ask_for_missing=False,
         )
@@ -1773,6 +1793,7 @@ def run_update_export(
         save_contacts_json(contacts_path, contacts_json)
 
         merge_export_dirs(staging_dir, target_dir)
+        apply_profile_text_replacements(target_dir, text_replacements)
 
         meta = load_export_meta(target_dir)
         meta.update(build_export_meta(config_run))
