@@ -244,7 +244,7 @@ def load_history(history_path: Path) -> dict:
     """Load export history from disk."""
     if not history_path.exists():
         return {}
-    contents = history_path.read_text()
+    contents = history_path.read_text(encoding="utf-8")
     if not contents.strip():
         return {}
     return normalize_persisted_dates(json.loads(contents))
@@ -254,7 +254,10 @@ def save_history(history_path: Path, history: dict) -> None:
     """Persist export history to disk."""
     canonical = normalize_persisted_dates(history)
     canonical.pop("last_end", None)
-    history_path.write_text(json.dumps(canonical, indent=2, sort_keys=True))
+    history_path.write_text(
+        json.dumps(canonical, indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
 
 
 def datetime_to_epoch_ms(value: dt.datetime | None) -> int:
@@ -524,7 +527,7 @@ def load_contacts_json(path: Path) -> dict:
     """Load persisted overrides from JSON."""
     if not path.exists():
         return {"overrides": {}}
-    contents = path.read_text()
+    contents = path.read_text(encoding="utf-8")
     if not contents.strip():
         return {"overrides": {}}
     return json.loads(contents)
@@ -532,7 +535,10 @@ def load_contacts_json(path: Path) -> dict:
 
 def save_contacts_json(path: Path, data: dict) -> None:
     """Persist overrides to JSON."""
-    path.write_text(json.dumps(data, indent=2, sort_keys=True))
+    path.write_text(
+        json.dumps(data, indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
 
 
 def load_contact_records_for_platform(
@@ -932,10 +938,10 @@ def postprocess_exports(context: PostprocessContext, ask_for_missing: bool = Tru
 
     keys = sorted(replacements.keys(), key=len, reverse=True)
     for file_path in txt_files:
-        text = file_path.read_text(errors="ignore")
+        text = file_path.read_text(encoding="utf-8", errors="ignore")
         for key in keys:
             text = replace_in_text(text, key, replacements[key])
-        file_path.write_text(text)
+        file_path.write_text(text, encoding="utf-8")
 
     for file_path in txt_files:
         new_name = file_path.name
@@ -1225,6 +1231,10 @@ def add_relabel_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("-p", "--platform", choices=["macOS", "iOS"], help="Source platform")
     parser.add_argument("-d", "--db-path", help="Path to macOS chat.db or iOS backup root")
     parser.add_argument("-o", "--export-path", help="Export directory to relabel")
+    parser.add_argument(
+        "--profile",
+        help="Saved profile whose aliases should be applied while relabeling",
+    )
     parser.add_argument("-j", "--contacts-json", help="Path to contacts overrides JSON")
     parser.add_argument("-y", "--history-json", help="Path to history JSON")
     parser.add_argument(
@@ -1499,7 +1509,7 @@ def load_export_meta(export_dir: Path) -> dict:
     meta_path = export_dir / EXPORT_META_FILE
     if not meta_path.exists():
         return {}
-    contents = meta_path.read_text()
+    contents = meta_path.read_text(encoding="utf-8")
     if not contents.strip():
         return {}
     return normalize_persisted_dates(json.loads(contents))
@@ -1511,7 +1521,10 @@ def save_export_meta(export_dir: Path, meta: dict) -> None:
     canonical = normalize_persisted_dates(meta)
     canonical.pop("last_end", None)
     canonical.pop("updated_at", None)
-    meta_path.write_text(json.dumps(canonical, indent=2, sort_keys=True))
+    meta_path.write_text(
+        json.dumps(canonical, indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
 
 
 def build_export_meta(config_run: RunConfig) -> dict:
@@ -1584,14 +1597,17 @@ def merge_text_files(staging_dir: Path, target_dir: Path) -> None:
     """Merge new text content into the target transcript chronologically."""
     for staged_file in staging_dir.glob("*.txt"):
         target_file = target_dir / staged_file.name
-        staged_text = staged_file.read_text(errors="ignore")
+        staged_text = staged_file.read_text(encoding="utf-8", errors="ignore")
         if not staged_text.strip():
             continue
         if not target_file.exists():
-            target_file.write_text(staged_text)
+            target_file.write_text(staged_text, encoding="utf-8")
             continue
-        existing_text = target_file.read_text(errors="ignore")
-        target_file.write_text(merge_transcript_text(existing_text, staged_text))
+        existing_text = target_file.read_text(encoding="utf-8", errors="ignore")
+        target_file.write_text(
+            merge_transcript_text(existing_text, staged_text),
+            encoding="utf-8",
+        )
 
 
 def merge_attachments(staging_dir: Path, target_dir: Path) -> int:
@@ -1826,12 +1842,15 @@ def resolve_relabel_paths(
 
 def run_relabel(
     export_base: Path,
-    contacts_path: Path,
     args: argparse.Namespace,
     interactive: bool,
+    cli_config: CLIConfig,
 ) -> None:
     """Relabel an existing export directory."""
     export_path = resolve_relabel_paths(export_base, args, interactive)
+    selected_profile = resolve_relabel_profile(args, cli_config, export_path)
+    contacts_base = config.base_output_dir(cli_config, profile=selected_profile)
+    contacts_path = resolve_contacts_path(contacts_base, args)
     platform, db_path = resolve_platform_and_db(args.platform, args.db_path, interactive)
 
     contacts_json = load_contacts_json(contacts_path)
@@ -1843,8 +1862,13 @@ def run_relabel(
             export_dir=export_path,
             contacts_map=contacts_map,
             overrides=overrides,
+            text_replacements=build_profile_text_replacements(selected_profile),
         ),
         ask_for_missing=interactive and not args.contacts_only,
+    )
+    apply_filename_aliases(
+        export_path,
+        build_profile_filename_aliases(selected_profile, contacts_map),
     )
 
     contacts_json["overrides"] = overrides
@@ -2081,6 +2105,26 @@ def require_profile(cli_config: CLIConfig, name: str) -> ProfileConfig:
     return profile
 
 
+def resolve_relabel_profile(
+    args: argparse.Namespace,
+    cli_config: CLIConfig,
+    export_path: Path,
+) -> ProfileConfig | None:
+    """Resolve relabel aliases from explicit, recorded, or default profile settings."""
+    if args.profile:
+        return require_profile(cli_config, args.profile)
+
+    recorded_profile = str(load_export_meta(export_path).get("profile", "")).strip()
+    if recorded_profile:
+        return require_profile(cli_config, recorded_profile)
+
+    default_profile = cli_config.export.default_profile
+    if default_profile:
+        return require_profile(cli_config, default_profile)
+
+    return None
+
+
 def resolve_selected_profile(
     args: argparse.Namespace,
     cli_config: CLIConfig,
@@ -2151,6 +2195,18 @@ def apply_config_defaults(
     return None
 
 
+def apply_relabel_config_defaults(args: argparse.Namespace, cli_config: CLIConfig) -> None:
+    """Apply global defaults that relabel needs without selecting a profile early."""
+    if args.platform:
+        return
+
+    platform = cli_config.export.platform
+    if not platform:
+        return
+
+    args.platform = platform
+
+
 def should_run_export_wizard(
     raw_export_argv: list[str],
     args: argparse.Namespace,
@@ -2196,7 +2252,11 @@ def main() -> int:
         presence_args = build_export_presence_parser().parse_args(raw_export_argv)
         explicit_options = set(vars(presence_args))
 
-    selected_profile = apply_config_defaults(args, cli_config, explicit_options)
+    selected_profile: ProfileConfig | None = None
+    if command == "relabel":
+        apply_relabel_config_defaults(args, cli_config)
+    else:
+        selected_profile = apply_config_defaults(args, cli_config, explicit_options)
 
     if command == "export" and getattr(args, "selector_preflight", False):
         interactive = should_run_export_wizard(raw_export_argv, args, selected_profile)
@@ -2205,7 +2265,6 @@ def main() -> int:
     export_base = config.base_output_dir(cli_config, profile=selected_profile)
     ensure_export_dir(export_base)
 
-    contacts_path = resolve_contacts_path(export_base, args)
     interactive = command == "export" and should_run_export_wizard(
         raw_export_argv,
         args,
@@ -2214,11 +2273,12 @@ def main() -> int:
     relabel_interactive = not args.non_interactive and command == "relabel"
 
     if command == "relabel":
-        run_relabel(export_base, contacts_path, args, relabel_interactive)
+        run_relabel(export_base, args, relabel_interactive, cli_config)
         return
 
     resolve_exporter_binary()
 
+    contacts_path = resolve_contacts_path(export_base, args)
     history_path = resolve_history_path(export_base, args)
     history = load_history(history_path)
 

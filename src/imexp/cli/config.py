@@ -215,7 +215,7 @@ def load_config(config_path: Path | None = None) -> CLIConfig:
     resolved_path = _resolve_config_path(config_path)
     root_dir = _resolve_root_dir(config_path, resolved_path)
     _ensure_config_file(resolved_path)
-    parser.read(resolved_path)
+    parser.read(resolved_path, encoding="utf-8")
 
     output_dir = _get_value(parser, "export", "output_dir") or ""
     output_dir = os.environ.get("IMEXP_BASE_OUTPUT_DIR", output_dir) or "./data/messages/sms"

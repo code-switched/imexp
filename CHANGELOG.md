@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 The format is based on Keep a Changelog and this project follows semantic versioning.
 
+## [0.6.0] - 2026-07-28
+
+### Fixed
+- Relabel now applies saved profile sender and filename aliases, preferring an explicit profile, then the archive's recorded profile, then the configured default.
+- Relabel now loads contact overrides from the selected profile's output directory.
+- Profile aliases and exported transcripts now use UTF-8 consistently across supported platforms.
+
 ## [0.5.0] - 2026-07-27
 
 ### Fixed
