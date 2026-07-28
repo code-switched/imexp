@@ -75,7 +75,8 @@ The `footer` should contain any information about **Breaking Changes** and is al
 ### Versioning
 - **If** your next release contains commit with...
    - **breaking changes** incremented the **major version**
-   - **API relevant changes** (`feat` or `fix`) incremented the **minor version**
+   - **new backward-compatible features** incremented the **minor version**
+   - **backward-compatible fixes** incremented the **patch version**
 - **Else** increment the **patch version**
 
 
@@ -196,4 +197,3 @@ See how [a minor change](#examples) to your commit message style can make a diff
 
 - https://github.com/github/platform-samples/tree/master/pre-receive-hooks  
 - https://github.community/t5/GitHub-Enterprise-Best-Practices/Using-pre-receive-hooks-in-GitHub-Enterprise/ba-p/13863
-

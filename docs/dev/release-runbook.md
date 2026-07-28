@@ -12,8 +12,8 @@ This runbook is the canonical checklist for shipping `imexp` releases to TestPyP
 
 Use semantic versioning.
 
-- `patch`: docs-only fixes, packaging fixes, small non-user-facing corrections
-- `minor`: new user-facing features and fixes
+- `patch`: backward-compatible bug fixes, documentation, packaging, and small corrections
+- `minor`: new backward-compatible user-facing features
 - `major`: breaking changes
 
 Replace the example version below with the version you are preparing.
