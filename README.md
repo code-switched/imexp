@@ -164,6 +164,13 @@ Re-run contact resolution on a previous export:
 imexp relabel --export-path ./data/messages/sms/2024-01-15-10-30-00
 ```
 
+To also apply saved sender and filename aliases, pass `--profile`. Otherwise, relabel uses the
+profile recorded in the export metadata before falling back to the configured default profile.
+
+```bash
+imexp relabel --profile client-a --export-path ./data/messages/sms/2024-01-15-10-30-00
+```
+
 ### Common options
 
 | Option | Description |

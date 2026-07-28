@@ -1225,6 +1225,10 @@ def add_relabel_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("-p", "--platform", choices=["macOS", "iOS"], help="Source platform")
     parser.add_argument("-d", "--db-path", help="Path to macOS chat.db or iOS backup root")
     parser.add_argument("-o", "--export-path", help="Export directory to relabel")
+    parser.add_argument(
+        "--profile",
+        help="Saved profile whose aliases should be applied while relabeling",
+    )
     parser.add_argument("-j", "--contacts-json", help="Path to contacts overrides JSON")
     parser.add_argument("-y", "--history-json", help="Path to history JSON")
     parser.add_argument(
@@ -1826,12 +1830,15 @@ def resolve_relabel_paths(
 
 def run_relabel(
     export_base: Path,
-    contacts_path: Path,
     args: argparse.Namespace,
     interactive: bool,
+    cli_config: CLIConfig,
 ) -> None:
     """Relabel an existing export directory."""
     export_path = resolve_relabel_paths(export_base, args, interactive)
+    selected_profile = resolve_relabel_profile(args, cli_config, export_path)
+    contacts_base = config.base_output_dir(cli_config, profile=selected_profile)
+    contacts_path = resolve_contacts_path(contacts_base, args)
     platform, db_path = resolve_platform_and_db(args.platform, args.db_path, interactive)
 
     contacts_json = load_contacts_json(contacts_path)
@@ -1843,8 +1850,13 @@ def run_relabel(
             export_dir=export_path,
             contacts_map=contacts_map,
             overrides=overrides,
+            text_replacements=build_profile_text_replacements(selected_profile),
         ),
         ask_for_missing=interactive and not args.contacts_only,
+    )
+    apply_filename_aliases(
+        export_path,
+        build_profile_filename_aliases(selected_profile, contacts_map),
     )
 
     contacts_json["overrides"] = overrides
@@ -2081,6 +2093,26 @@ def require_profile(cli_config: CLIConfig, name: str) -> ProfileConfig:
     return profile
 
 
+def resolve_relabel_profile(
+    args: argparse.Namespace,
+    cli_config: CLIConfig,
+    export_path: Path,
+) -> ProfileConfig | None:
+    """Resolve relabel aliases from explicit, recorded, or default profile settings."""
+    if args.profile:
+        return require_profile(cli_config, args.profile)
+
+    recorded_profile = str(load_export_meta(export_path).get("profile", "")).strip()
+    if recorded_profile:
+        return require_profile(cli_config, recorded_profile)
+
+    default_profile = cli_config.export.default_profile
+    if default_profile:
+        return require_profile(cli_config, default_profile)
+
+    return None
+
+
 def resolve_selected_profile(
     args: argparse.Namespace,
     cli_config: CLIConfig,
@@ -2151,6 +2183,18 @@ def apply_config_defaults(
     return None
 
 
+def apply_relabel_config_defaults(args: argparse.Namespace, cli_config: CLIConfig) -> None:
+    """Apply global defaults that relabel needs without selecting a profile early."""
+    if args.platform:
+        return
+
+    platform = cli_config.export.platform
+    if not platform:
+        return
+
+    args.platform = platform
+
+
 def should_run_export_wizard(
     raw_export_argv: list[str],
     args: argparse.Namespace,
@@ -2196,7 +2240,11 @@ def main() -> int:
         presence_args = build_export_presence_parser().parse_args(raw_export_argv)
         explicit_options = set(vars(presence_args))
 
-    selected_profile = apply_config_defaults(args, cli_config, explicit_options)
+    selected_profile: ProfileConfig | None = None
+    if command == "relabel":
+        apply_relabel_config_defaults(args, cli_config)
+    else:
+        selected_profile = apply_config_defaults(args, cli_config, explicit_options)
 
     if command == "export" and getattr(args, "selector_preflight", False):
         interactive = should_run_export_wizard(raw_export_argv, args, selected_profile)
@@ -2205,7 +2253,6 @@ def main() -> int:
     export_base = config.base_output_dir(cli_config, profile=selected_profile)
     ensure_export_dir(export_base)
 
-    contacts_path = resolve_contacts_path(export_base, args)
     interactive = command == "export" and should_run_export_wizard(
         raw_export_argv,
         args,
@@ -2214,11 +2261,12 @@ def main() -> int:
     relabel_interactive = not args.non_interactive and command == "relabel"
 
     if command == "relabel":
-        run_relabel(export_base, contacts_path, args, relabel_interactive)
+        run_relabel(export_base, args, relabel_interactive, cli_config)
         return
 
     resolve_exporter_binary()
 
+    contacts_path = resolve_contacts_path(export_base, args)
     history_path = resolve_history_path(export_base, args)
     history = load_history(history_path)
 
