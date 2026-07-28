@@ -337,6 +337,69 @@ def test_run_continuous_ignores_config_start_date_when_meta_exists(
     assert cli.date_to_cli(captured["config_run"].dates.start) == "2024-06-15"
 
 
+def test_run_continuous_passes_selected_profile_to_update(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Continuous exports retain the selected profile through the merge path."""
+    export_base = tmp_path / "exports"
+    contacts_path = export_base / "contacts.json"
+    history_path = export_base / "history.json"
+    export_base.mkdir()
+    selected_profile = cli.ProfileConfig(
+        name="crc-team",
+        handles=("+18503753520",),
+        names=(),
+        label="CRC Team",
+        slug="crc-team",
+        platform="",
+        format="",
+        copy_method="",
+        use_caller_id=None,
+        output_dir="",
+        self_label="Chris Smith",
+        self_aliases=("💙 Christopher Smith 🧑🏾‍💻",),
+    )
+    captured: dict[str, cli.ProfileConfig | None] = {}
+
+    def fake_run_update_export(
+        _config_run: cli.RunConfig,
+        _target_dir: Path,
+        _export_base: Path,
+        _contacts_path: Path,
+        selected_profile: cli.ProfileConfig | None = None,
+    ) -> None:
+        captured["profile"] = selected_profile
+
+    monkeypatch.setattr(
+        cli,
+        "resolve_platform_and_db",
+        lambda _platform, _db_path, _interactive: ("macOS", ""),
+    )
+    monkeypatch.setattr(
+        cli,
+        "resolve_conversation_filter",
+        lambda conv_filter, _platform, _db_path, selector_mode="union": conv_filter,
+    )
+    monkeypatch.setattr(cli, "run_update_export", fake_run_update_export)
+
+    args = cli.build_export_fallback_parser().parse_args([])
+    args.conversation_filter = "+18503753520"
+    args.config_start_date = "2026-01-01"
+
+    cli.run_continuous(
+        args=args,
+        export_base=export_base,
+        contacts_path=contacts_path,
+        history_path=history_path,
+        history={},
+        interactive=False,
+        selected_profile=selected_profile,
+    )
+
+    assert captured["profile"] == selected_profile
+
+
 def test_resolve_update_dates_no_source_raises(tmp_path: Path) -> None:
     """No date source at all raises ValueError."""
 
