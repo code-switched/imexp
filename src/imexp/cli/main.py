@@ -888,7 +888,8 @@ def replace_in_text(text: str, key: str, value: str) -> str:
     if re.fullmatch(r"\+?\d+", key):
         pattern = re.compile(rf"(?<!\d){re.escape(key)}(?!\d)")
         return pattern.sub(value, text)
-    return text.replace(key, value)
+    pattern = re.compile(rf"(?<!\w){re.escape(key)}(?!\w)")
+    return pattern.sub(value, text)
 
 
 def postprocess_exports(context: PostprocessContext, ask_for_missing: bool = True) -> None:
@@ -980,7 +981,7 @@ def build_profile_text_replacements(profile: ProfileConfig | None) -> dict[str, 
     if not target:
         return {}
 
-    aliases: dict[str, str] = {"Me": target}
+    aliases: dict[str, str] = {}
     for alias in profile.self_aliases:
         stripped = alias.strip()
         if not stripped:

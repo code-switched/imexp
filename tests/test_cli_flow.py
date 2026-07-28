@@ -243,7 +243,7 @@ def test_build_profile_text_replacements_uses_self_label_and_aliases() -> None:
         use_caller_id=None,
         output_dir="",
         self_label="Christopher Smith",
-        self_aliases=("Phlo Young",),
+        self_aliases=("Me", "Phlo Young"),
     )
 
     replacements = cli.build_profile_text_replacements(profile)
@@ -252,6 +252,37 @@ def test_build_profile_text_replacements_uses_self_label_and_aliases() -> None:
         "Me": "Christopher Smith",
         "Phlo Young": "Christopher Smith",
     }
+
+
+def test_build_profile_text_replacements_does_not_add_implicit_me_alias() -> None:
+    """Profiles only normalize Me when it is an explicit self alias."""
+    profile = cli.ProfileConfig(
+        name="pastor-will",
+        handles=(),
+        names=(),
+        label="Pastor Will",
+        slug="pastor-will",
+        platform="",
+        format="",
+        copy_method="",
+        use_caller_id=None,
+        output_dir="",
+        self_label="Christopher Smith",
+        self_aliases=("Phlo Young",),
+    )
+
+    replacements = cli.build_profile_text_replacements(profile)
+
+    assert replacements == {"Phlo Young": "Christopher Smith"}
+
+
+def test_replace_in_text_does_not_replace_word_substrings() -> None:
+    """Standalone aliases do not corrupt words such as Merrita."""
+    text = "Merrita met Me yesterday."
+
+    assert cli.replace_in_text(text, "Me", "Chris Smith") == (
+        "Merrita met Chris Smith yesterday."
+    )
 
 
 def test_build_profile_filename_aliases_can_be_disabled() -> None:
