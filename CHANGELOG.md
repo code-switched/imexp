@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on Keep a Changelog and this project follows semantic versioning.
 
+## [0.5.0] - 2026-07-27
+
+### Fixed
+- Generic aliases now match complete Unicode tokens, avoiding accidental rewrites inside contact names, message text, and exported filenames.
+- Profile self-label normalization now rewrites `Me` only when it is explicitly configured in `self_aliases`.
+
 ## [0.4.0] - 2026-06-26
 
 ### Added
