@@ -202,6 +202,41 @@ def test_postprocess_exports_applies_text_only_replacements(tmp_path: Path) -> N
     assert file_path.name == "chat.txt"
 
 
+def test_postprocess_exports_replaces_underscore_delimited_filename_aliases(
+    tmp_path: Path,
+) -> None:
+    """Profile aliases rename underscore-delimited filenames without corrupting words."""
+    export_dir = tmp_path / "exports"
+    export_dir.mkdir()
+    file_path = export_dir / "chat_Merrita_Me.txt"
+    file_path.write_text("Merrita met Me yesterday.")
+
+    cli.postprocess_exports(
+        cli.PostprocessContext(
+            export_dir=export_dir,
+            contacts_map={},
+            overrides={},
+            text_replacements={"Me": "Chris Smith"},
+        ),
+        ask_for_missing=False,
+    )
+
+    renamed_file = export_dir / "chat_Merrita_Chris Smith.txt"
+    assert renamed_file.read_text() == "Merrita met Chris Smith yesterday."
+
+
+def test_apply_filename_aliases_replaces_underscore_delimited_aliases(tmp_path: Path) -> None:
+    """Filename aliases treat underscores as participant separators."""
+    export_dir = tmp_path / "exports"
+    export_dir.mkdir()
+    file_path = export_dir / "chat_Me_Alice.txt"
+    file_path.write_text("hello\n")
+
+    cli.apply_filename_aliases(export_dir, {"Me": "Chris Smith"})
+
+    assert (export_dir / "chat_Chris Smith_Alice.txt").exists()
+
+
 def test_build_profile_filename_aliases_uses_contacts_and_names() -> None:
     """Profile aliases combine handle-derived contact names and explicit names."""
     profile = cli.ProfileConfig(

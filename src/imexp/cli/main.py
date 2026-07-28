@@ -882,13 +882,23 @@ def build_replacements(
 
 def replace_in_text(text: str, key: str, value: str) -> str:
     """Replace a key with a value in arbitrary text."""
+    return replace_alias(text, key, value, r"\w")
+
+
+def replace_in_filename(filename: str, key: str, value: str) -> str:
+    """Replace a key with a value in an exported filename."""
+    return replace_alias(filename, key, value, r"[^\W_]")
+
+
+def replace_alias(text: str, key: str, value: str, word_char_pattern: str) -> str:
+    """Replace a key while preserving adjacent word characters."""
     if "@" in key:
         pattern = re.compile(re.escape(key), re.IGNORECASE)
         return pattern.sub(value, text)
     if re.fullmatch(r"\+?\d+", key):
         pattern = re.compile(rf"(?<!\d){re.escape(key)}(?!\d)")
         return pattern.sub(value, text)
-    pattern = re.compile(rf"(?<!\w){re.escape(key)}(?!\w)")
+    pattern = re.compile(rf"(?<!{word_char_pattern}){re.escape(key)}(?!{word_char_pattern})")
     return pattern.sub(value, text)
 
 
@@ -930,7 +940,7 @@ def postprocess_exports(context: PostprocessContext, ask_for_missing: bool = Tru
     for file_path in txt_files:
         new_name = file_path.name
         for key in keys:
-            new_name = replace_in_text(new_name, key, replacements[key])
+            new_name = replace_in_filename(new_name, key, replacements[key])
         if new_name != file_path.name:
             file_path.rename(file_path.with_name(new_name))
 
@@ -1028,7 +1038,7 @@ def apply_filename_aliases(export_dir: Path, filename_aliases: dict[str, str]) -
 
         new_name = file_path.name
         for key in keys:
-            new_name = replace_in_text(new_name, key, filename_aliases[key])
+            new_name = replace_in_filename(new_name, key, filename_aliases[key])
 
         if new_name == file_path.name:
             continue
