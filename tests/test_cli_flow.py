@@ -202,6 +202,41 @@ def test_postprocess_exports_applies_text_only_replacements(tmp_path: Path) -> N
     assert file_path.name == "chat.txt"
 
 
+def test_postprocess_exports_replaces_underscore_delimited_filename_aliases(
+    tmp_path: Path,
+) -> None:
+    """Profile aliases rename underscore-delimited filenames without corrupting words."""
+    export_dir = tmp_path / "exports"
+    export_dir.mkdir()
+    file_path = export_dir / "chat_Merrita_Me.txt"
+    file_path.write_text("Merrita met Me yesterday.")
+
+    cli.postprocess_exports(
+        cli.PostprocessContext(
+            export_dir=export_dir,
+            contacts_map={},
+            overrides={},
+            text_replacements={"Me": "Chris Smith"},
+        ),
+        ask_for_missing=False,
+    )
+
+    renamed_file = export_dir / "chat_Merrita_Chris Smith.txt"
+    assert renamed_file.read_text() == "Merrita met Chris Smith yesterday."
+
+
+def test_apply_filename_aliases_replaces_underscore_delimited_aliases(tmp_path: Path) -> None:
+    """Filename aliases treat underscores as participant separators."""
+    export_dir = tmp_path / "exports"
+    export_dir.mkdir()
+    file_path = export_dir / "chat_Me_Alice.txt"
+    file_path.write_text("hello\n")
+
+    cli.apply_filename_aliases(export_dir, {"Me": "Chris Smith"})
+
+    assert (export_dir / "chat_Chris Smith_Alice.txt").exists()
+
+
 def test_build_profile_filename_aliases_uses_contacts_and_names() -> None:
     """Profile aliases combine handle-derived contact names and explicit names."""
     profile = cli.ProfileConfig(
@@ -243,7 +278,7 @@ def test_build_profile_text_replacements_uses_self_label_and_aliases() -> None:
         use_caller_id=None,
         output_dir="",
         self_label="Christopher Smith",
-        self_aliases=("Phlo Young",),
+        self_aliases=("Me", "Phlo Young"),
     )
 
     replacements = cli.build_profile_text_replacements(profile)
@@ -252,6 +287,37 @@ def test_build_profile_text_replacements_uses_self_label_and_aliases() -> None:
         "Me": "Christopher Smith",
         "Phlo Young": "Christopher Smith",
     }
+
+
+def test_build_profile_text_replacements_does_not_add_implicit_me_alias() -> None:
+    """Profiles only normalize Me when it is an explicit self alias."""
+    profile = cli.ProfileConfig(
+        name="pastor-will",
+        handles=(),
+        names=(),
+        label="Pastor Will",
+        slug="pastor-will",
+        platform="",
+        format="",
+        copy_method="",
+        use_caller_id=None,
+        output_dir="",
+        self_label="Christopher Smith",
+        self_aliases=("Phlo Young",),
+    )
+
+    replacements = cli.build_profile_text_replacements(profile)
+
+    assert replacements == {"Phlo Young": "Christopher Smith"}
+
+
+def test_replace_in_text_does_not_replace_word_substrings() -> None:
+    """Standalone aliases do not corrupt words such as Merrita."""
+    text = "Merrita met Me yesterday."
+
+    assert cli.replace_in_text(text, "Me", "Chris Smith") == (
+        "Merrita met Chris Smith yesterday."
+    )
 
 
 def test_build_profile_filename_aliases_can_be_disabled() -> None:
