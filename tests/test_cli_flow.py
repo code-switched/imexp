@@ -41,11 +41,12 @@ def test_resolve_platform_and_db_macos(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_resolve_date_range(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Date range prompts parse expected inputs."""
+    """Date range prompts parse an inclusive end date."""
     monkeypatch.setattr("builtins.input", input_sequence(["2024-01-02", "2024-02-03"]))
     dates = cli.resolve_date_range(None)
     assert cli.date_to_cli(dates.start) == "2024-01-02"
     assert cli.date_to_cli(dates.end or dt.datetime.min) == "2024-02-03"
+    assert cli.inclusive_end_date_to_cli(dates.end or dt.datetime.min) == "2024-02-04"
 
 
 def test_resolve_output_path(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -90,6 +91,7 @@ def test_build_export_command_macos(tmp_path: Path) -> None:
     assert "--conversation-filter" in cmd
     assert "--use-caller-id" in cmd
     assert "--end-date" in cmd
+    assert cmd[cmd.index("--end-date") + 1] == "2024-01-03"
 
 
 def test_build_export_command_ios(tmp_path: Path) -> None:

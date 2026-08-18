@@ -180,7 +180,7 @@ imexp relabel --profile client-a --export-path ./data/messages/sms/2024-01-15-10
 | Option | Description |
 |--------|-------------|
 | `--start-date` | Start date (natural language or YYYY-MM-DD) |
-| `--end-date` | End date (defaults to now) |
+| `--end-date` | Inclusive end date (defaults to today) |
 | `--format` | Output format: `txt`, `html` (default: `txt`) |
 | `--platform` | `macOS` or `iOS` |
 | `--db-path` | Path to iOS backup or custom chat.db |

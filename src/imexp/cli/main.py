@@ -240,6 +240,11 @@ def date_to_cli(value: dt.datetime) -> str:
     return value.strftime("%Y-%m-%d")
 
 
+def inclusive_end_date_to_cli(value: dt.datetime) -> str:
+    """Format an inclusive end date as the exporter's exclusive cutoff."""
+    return (value.date() + dt.timedelta(days=1)).isoformat()
+
+
 def load_history(history_path: Path) -> dict:
     """Load export history from disk."""
     if not history_path.exists():
@@ -1164,7 +1169,7 @@ def add_export_args(
         "-e",
         "--end-date",
         default=default_value,
-        help="End date (natural language, before this date)",
+        help="End date (natural language, inclusive)",
     )
     parser.add_argument(
         "-u",
@@ -1355,7 +1360,7 @@ def resolve_date_range(last_end_dt: dt.datetime | None) -> DateRange:
     start_text = prompt("Start date (natural language)", default=default_start)
     start_dt = parse_date(start_text) or dt.datetime.now()
 
-    end_text = prompt("End date (natural language, before this date)", default="now")
+    end_text = prompt("End date (natural language, inclusive)", default="today")
     end_dt = parse_date(end_text) or dt.datetime.now()
     return DateRange(start=start_dt, end=end_dt)
 
@@ -1482,7 +1487,7 @@ def build_export_command(
     if config_run.options.use_caller_id:
         cmd += ["--use-caller-id"]
     if config_run.dates.end:
-        cmd += ["--end-date", date_to_cli(config_run.dates.end)]
+        cmd += ["--end-date", inclusive_end_date_to_cli(config_run.dates.end)]
 
     return cmd
 
@@ -1497,13 +1502,11 @@ def warn_on_date_range(config_run: RunConfig) -> None:
     """Print a preflight summary for the date range."""
     start_s = date_to_cli(config_run.dates.start)
     if config_run.dates.end is None:
-        eprint(f"Date range: {start_s} -> (before now)")
+        eprint(f"Date range: {start_s} -> today (inclusive)")
         return
 
     end_s = date_to_cli(config_run.dates.end)
-    eprint(f"Date range: {start_s} -> (before {end_s})")
-    if start_s == end_s:
-        eprint("Warning: start and end are the same day; exports may be empty.")
+    eprint(f"Date range: {start_s} -> {end_s} (inclusive)")
 
 
 def load_contacts_for_platform(platform: str, db_path: str) -> dict[str, str]:
