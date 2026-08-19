@@ -1502,7 +1502,7 @@ def warn_on_date_range(config_run: RunConfig) -> None:
     """Print a preflight summary for the date range."""
     start_s = date_to_cli(config_run.dates.start)
     if config_run.dates.end is None:
-        eprint(f"Date range: {start_s} -> today (inclusive)")
+        eprint(f"Date range: {start_s} -> (no end date)")
         return
 
     end_s = date_to_cli(config_run.dates.end)

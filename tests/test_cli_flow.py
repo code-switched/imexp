@@ -124,6 +124,35 @@ def test_build_export_command_ios(tmp_path: Path) -> None:
     assert "/backup" in cmd
 
 
+def test_warn_on_date_range_reports_an_unbounded_end_date(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """An omitted end date is reported without implying a current-day cutoff."""
+    config_run = cli.RunConfig(
+        options=cli.ExportOptions(
+            platform="macOS",
+            db_path="",
+            conv_filter="",
+            use_caller_id=False,
+            copy_method="full",
+            output_format="txt",
+            diagnostics=False,
+            no_lazy=False,
+            version=False,
+        ),
+        dates=cli.DateRange(start=dt.datetime(2024, 1, 1), end=None),
+        paths=cli.PathsConfig(
+            export_path=tmp_path,
+            contacts_json=tmp_path / "contacts.json",
+            history_json=tmp_path / "history.json",
+        ),
+    )
+
+    cli.warn_on_date_range(config_run)
+
+    assert capsys.readouterr().err.strip() == "Date range: 2024-01-01 -> (no end date)"
+
+
 def test_export_parser_rejects_profile_and_filter_together() -> None:
     """Profiles and raw conversation filters are mutually exclusive."""
     parser = cli.build_export_fallback_parser()
