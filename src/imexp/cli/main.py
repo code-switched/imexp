@@ -30,7 +30,8 @@ HISTORY_FILE = "history.json"
 EXPORT_META_FILE = "export_meta.json"
 STAGING_DIR = ".staging"
 TRANSCRIPT_TIMESTAMP_RE = re.compile(
-    r"^(?P<stamp>[A-Z][a-z]{2} \d{2}, \d{4}\s+\d{1,2}:\d{2}:\d{2} [AP]M)"
+    r"^(?P<stamp>[A-Z][a-z]{2} \d{2}, \d{4}\s+\d{1,2}:\d{2}:\d{2} [AP]M)",
+    re.MULTILINE,
 )
 
 
@@ -1567,14 +1568,21 @@ def normalize_transcript_block(block: str) -> str:
 
 
 def split_transcript_blocks(text: str) -> list[str]:
-    """Split a transcript file into normalized message blocks."""
+    """Split a transcript at top-level message timestamps."""
     stripped = text.strip()
     if not stripped:
         return []
 
+    boundaries = [match.start() for match in TRANSCRIPT_TIMESTAMP_RE.finditer(stripped)]
+    if not boundaries:
+        return [normalize_transcript_block(stripped)]
+    if boundaries[0] != 0:
+        boundaries.insert(0, 0)
+    boundaries.append(len(stripped))
+
     blocks: list[str] = []
-    for block in re.split(r"\n\s*\n", stripped):
-        normalized = normalize_transcript_block(block)
+    for start, end in zip(boundaries, boundaries[1:]):
+        normalized = normalize_transcript_block(stripped[start:end])
         if not normalized:
             continue
         blocks.append(normalized)

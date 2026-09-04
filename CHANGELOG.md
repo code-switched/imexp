@@ -4,6 +4,11 @@ All notable changes to this project will be documented in this file.
 
 The format is based on Keep a Changelog and this project follows semantic versioning.
 
+## [0.6.3] - 2026-09-04
+
+### Fixed
+- Continuous transcript merges now preserve blank lines inside multiline messages instead of sorting detached paragraphs after newer messages.
+
 ## [0.6.2] - 2026-08-18
 
 ### Fixed
