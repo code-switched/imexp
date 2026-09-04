@@ -623,6 +623,33 @@ def test_merge_transcript_text_sorts_backfilled_blocks_chronologically() -> None
     assert merged.count("Apr 09, 2026  2:48:04 AM") == 1
 
 
+def test_merge_transcript_text_preserves_internal_blank_lines() -> None:
+    """Blank lines in a message body do not become undated transcript blocks."""
+    existing = (
+        "Aug 01, 2026  8:00:00 PM\n"
+        "Ouida Winters\n"
+        "108 Hornet LN\n"
+        "\n"
+        "Valparaiso, FL 32580\n\n"
+        "Aug 30, 2026  1:09:10 PM\n"
+        "Chris Smith\n"
+        "Ok no problem\n"
+    )
+    staged = (
+        "Sep 03, 2026  7:58:51 PM (Read by you after 1 hour, 5 minutes)\n"
+        "Ouida Winters\n"
+        "Greetings\n"
+        "Are you available next Thursday at 7:30pm to talk website\n"
+    )
+
+    merged = cli.merge_transcript_text(existing, staged)
+
+    assert len(cli.split_transcript_blocks(existing)) == 2
+    assert "108 Hornet LN\n\nValparaiso, FL 32580" in merged
+    assert merged.index("Valparaiso, FL 32580") < merged.index("Aug 30, 2026")
+    assert merged.index("Aug 30, 2026") < merged.index("Sep 03, 2026")
+
+
 def test_run_update_export_cleans_staging_on_success(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
